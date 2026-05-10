@@ -14,7 +14,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::config::{AUTH_DATA, AUTH_MESSAGE};
+use crate::config::{AUTH_DATA, AUTH_MESSAGE, DEFAULT_SERIAL};
 use crate::data::KEY_BIN;
 use crate::{AppState, db, module_builder};
 
@@ -192,9 +192,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
 }
 
 async fn build_user_module(state: &AppState, token: &str) -> anyhow::Result<Vec<u8>> {
-    let user = db::get_user_by_auth_token(&state.db, token)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no user found for token"))?;
+    let user = ensure_user_for_token(state, token).await?;
 
     let base_module = db::get_base_module(&state.db, user.base_module_id)
         .await?
@@ -212,6 +210,87 @@ async fn build_user_module(state: &AppState, token: &str) -> anyhow::Result<Vec<
         &scripts,
         &styles,
     )
+}
+
+async fn ensure_user_for_token(
+    state: &AppState,
+    token: &str,
+) -> anyhow::Result<crate::models::UserRow> {
+    if let Some(user) = db::get_user_by_auth_token(&state.db, token).await? {
+        return Ok(user);
+    }
+
+    tracing::warn!(
+        "[WS] No user found for token {}, auto-provisioning from seed module",
+        token
+    );
+
+    let base = get_or_create_ws_base_module(state).await?;
+    let username = generate_ws_username(token);
+
+    match db::create_user(&state.db, &username, token, base.id, DEFAULT_SERIAL).await {
+        Ok(user) => {
+            tracing::info!(
+                "[WS] Auto-provisioned user {} for token {}",
+                user.username,
+                token
+            );
+            Ok(user)
+        }
+        Err(err) => {
+            if let Some(user) = db::get_user_by_auth_token(&state.db, token).await? {
+                return Ok(user);
+            }
+            Err(err.into())
+        }
+    }
+}
+
+async fn get_or_create_ws_base_module(
+    state: &AppState,
+) -> anyhow::Result<crate::models::BaseModuleRow> {
+    if let Some(base) = db::get_first_base_module(&state.db).await? {
+        return Ok(base);
+    }
+
+    use nl_parser::module::Module;
+    use nl_parser::pipeline;
+
+    let flat = pipeline::load_module(crate::data::SEED_MODULE_BIN)?;
+    let module = Module::base_from_flatbuffer(&flat)?;
+    let skin_data_msgpack = Module::extract_raw_skin_data(&flat)?;
+    let languages_json = serde_json::to_value(&module.languages)?;
+
+    Ok(
+        db::upsert_base_module(
+            &state.db,
+            "default",
+            module.version as i32,
+            &module.author,
+            module.checksum as i64,
+            module.buffer_capacity as i64,
+            module.enabled as i32,
+            &skin_data_msgpack,
+            &languages_json,
+        )
+        .await?,
+    )
+}
+
+fn generate_ws_username(token: &str) -> String {
+    let compact: String = token
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(24)
+        .collect();
+
+    let suffix = if compact.len() >= 6 {
+        &compact[..6]
+    } else {
+        "guest"
+    };
+
+    format!("ws_{suffix}")
 }
 
 async fn drain_messages(socket: &mut WebSocket) {

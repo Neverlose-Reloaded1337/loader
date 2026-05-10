@@ -1,7 +1,7 @@
 use std::{
-    env, fs,
+    env,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use argon2::{
@@ -351,15 +351,15 @@ async fn reqitem_handler(Query(params): Query<HashMap<String, String>>) -> Respo
         return empty_ok();
     };
 
-    let Some(library) = lua_library_response(&name) else {
+    let Some(library) = lua_library_response(&name).await else {
         tracing::warn!("[HTTP] /api/reqitem missing library {}", name);
         return empty_ok();
     };
 
     tracing::debug!(
-        "[HTTP] -> reqitem library={} file={} bytes={}",
+        "[HTTP] -> reqitem library={} source={} bytes={}",
         name,
-        library.path.display(),
+        library.source,
         library.body.len()
     );
     let body = reqitem_library_json(&name, &library.body);
@@ -374,7 +374,7 @@ async fn reqitem_handler(Query(params): Query<HashMap<String, String>>) -> Respo
 
 #[derive(Clone)]
 struct LuaLibrary {
-    path: PathBuf,
+    source: String,
     body: Vec<u8>,
 }
 
@@ -405,64 +405,65 @@ fn sanitize_lua_library_name(name: &str) -> Option<String> {
     Some(normalized)
 }
 
-fn lua_library_response(name: &str) -> Option<LuaLibrary> {
+async fn lua_library_response(name: &str) -> Option<LuaLibrary> {
     let name = sanitize_lua_library_name(name)?;
-    for candidate in lua_library_candidates(&name) {
-        match fs::read(&candidate) {
+    for candidate in lua_library_urls(&name) {
+        match fetch_lua_library(&candidate).await {
             Ok(body) => {
                 tracing::info!(
                     "[HTTP] lua library {} -> {} ({} bytes)",
                     name,
-                    candidate.display(),
+                    candidate,
                     body.len()
                 );
                 return Some(LuaLibrary {
-                    path: candidate,
+                    source: candidate,
                     body,
                 });
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
-                tracing::warn!(
-                    "[HTTP] failed reading lua library candidate {}: {}",
-                    candidate.display(),
-                    err
-                );
+                tracing::warn!("[HTTP] failed fetching lua library {}: {}", candidate, err);
             }
         }
     }
     None
 }
 
-fn lua_library_candidates(name: &str) -> Vec<PathBuf> {
+fn lua_library_urls(name: &str) -> Vec<String> {
     let mut candidates = Vec::new();
-    let base_dirs = lua_library_dirs();
+    let base_url = lua_library_base_url();
     let requested = Path::new(name);
     let has_extension = requested.extension().is_some();
 
-    for dir in base_dirs {
-        candidates.push(dir.join(requested));
-        if !has_extension {
-            candidates.push(dir.join(format!("{name}.bin")));
-            candidates.push(dir.join(format!("{name}.lua")));
-        }
+    candidates.push(format!("{base_url}/{name}"));
+    if !has_extension {
+        candidates.push(format!("{base_url}/{name}.bin"));
+        candidates.push(format!("{base_url}/{name}.lua"));
     }
 
     candidates
 }
 
-fn lua_library_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+fn lua_library_base_url() -> String {
+    env::var("LUA_LIBRARY_BASE_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            "https://raw.githubusercontent.com/Neverlose-Reloaded1337/Neverlose-Reloaded/main/libraries/open_source".to_string()
+        })
+}
 
-    if let Ok(extra_dirs) = env::var("LUA_LIBRARY_DIRS") {
-        dirs.extend(env::split_paths(&extra_dirs).filter(|path| !path.as_os_str().is_empty()));
-    }
+async fn fetch_lua_library(url: &str) -> Result<Vec<u8>, reqwest::Error> {
+    let response = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::USER_AGENT, "neverlose-server/0.1")
+        .send()
+        .await?
+        .error_for_status()?;
 
-    dirs.push(PathBuf::from("libraries/open_source"));
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    dirs.push(manifest_dir.join("../../libraries/open_source"));
-    dirs
+    let body = response.bytes().await?;
+    Ok(body.to_vec())
 }
 
 fn reqitem_library_json(name: &str, body: &[u8]) -> Vec<u8> {
