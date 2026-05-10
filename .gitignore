@@ -1,0 +1,27 @@
+# Folders
+**/Release/
+Debug/
+target/
+.vs/
+**/compare_bins/
+server/rust-server/certs/
+**/.DS_Store
+**/target_inspect/
+
+# Files
+*.dll
+*.sdf
+*.suo
+*.user
+.codex
+
+# obviously
+.env
+*.env
+
+# ida files
+*.i64
+*.id0
+*.id1
+*.nam
+*.til
