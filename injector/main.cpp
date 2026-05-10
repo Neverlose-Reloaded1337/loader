@@ -13,7 +13,7 @@ namespace
         PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;
 
     LPVOID g_nt_open_file = GetProcAddress(LoadLibraryW(L"ntdll"), "NtOpenFile");
-
+    //67
     void print_banner()
     {
         SetConsoleTitleA("neverpastelite");
