@@ -1,27 +1,46 @@
-# Folders
-**/Release/
-Debug/
+# dependencies
+node_modules/
+
+# build artifacts
+dist/
+build/
+out/
 target/
-.vs/
-**/compare_bins/
-server/rust-server/certs/
-**/.DS_Store
-**/target_inspect/
+bin/
+obj/
+release/
+debug/
+coverage/
 
-# Files
-*.dll
-*.sdf
-*.suo
-*.user
-.codex
+# framework caches
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+.svelte-kit/
 
-# obviously
+# temp files
+tmp/
+temp/
+.tmp/
+*.tmp
+*.log
+
+# env / secrets
 .env
-*.env
+.env.local
+.env.development.local
+.env.production.local
+.env.test.local
 
-# ida files
-*.i64
-*.id0
-*.id1
-*.nam
-*.til
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# editor / system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
