@@ -5,11 +5,6 @@ pub const WS_PORT: u16 = 30030;
 pub const AUTH_MESSAGE: &str = "fz8XfUGGBvylN7IW";
 pub const AUTH_DATA: &str = "5aAxpFpna5QqvYMv";
 
-pub const DEFAULT_DATABASE_URL: &str = "postgres://neverlose:neverlose@localhost/neverlose";
-
-pub const TLS_CERT_PATH: &str = "certs/cert.pem";
-pub const TLS_KEY_PATH: &str = "certs/key.pem";
-
 pub const DEFAULT_USER_TOKEN: &str =
     "6475647aff43a0c00c472e4cfeff898978f60acee870f6a0eb2e8d0d86448a67";
 pub const MODULE_AUTH_TOKEN: &str = "3JNrQVLU04XQc0aKl563";

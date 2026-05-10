@@ -26,7 +26,7 @@ pub struct BaseModuleRow {
     pub buffer_capacity: i64,
     pub enabled: i32,
     pub skin_data_msgpack: Vec<u8>,
-    pub languages_json: serde_json::Value,
+    pub languages_json: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

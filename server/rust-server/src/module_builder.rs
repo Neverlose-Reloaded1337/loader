@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nl_parser::flatcc_builder::{FlatccBuilder, Ref};
 use nl_parser::module::{Language, LogEntry, Module, serialize_translations_json};
 use nl_parser::pipeline;
@@ -15,23 +15,17 @@ pub fn build_module_bin(
     scripts: &[ScriptRow],
     styles: &[StyleRow],
 ) -> Result<Vec<u8>> {
-    let languages: Vec<Language> = serde_json::from_value(base.languages_json.clone())
-        .context("deserialize languages from DB")?;
+    let languages: Vec<Language> =
+        serde_json::from_str(&base.languages_json).context("deserialize languages from DB")?;
 
-    // Build entry_id -> script metadata lookup.
-    let script_rows: std::collections::HashMap<i32, &ScriptRow> = scripts
-        .iter()
-        .map(|script| (script.entry_id, script))
-        .collect();
-    let style_rows: std::collections::HashMap<i32, &StyleRow> = styles
-        .iter()
-        .map(|style| (style.entry_id, style))
-        .collect();
+    let script_rows: std::collections::HashMap<i32, &ScriptRow> =
+        scripts.iter().map(|script| (script.entry_id, script)).collect();
+    let style_rows: std::collections::HashMap<i32, &StyleRow> =
+        styles.iter().map(|style| (style.entry_id, style)).collect();
     let mut config_log = Vec::new();
     let mut script_log = Vec::new();
     let mut style_log = Vec::new();
     for entry in log_entries {
-        // Use row name from DB if available, otherwise fall back to entry_type.
         let script = script_rows.get(&entry.entry_id).copied();
         let style = style_rows.get(&entry.entry_id).copied();
         let name = script
@@ -122,19 +116,13 @@ fn build_inner_flatbuffer(
 ) -> Result<Vec<u8>> {
     let mut b = FlatccBuilder::new();
 
-    // === PHASE 1: Log entries (created FIRST = highest buffer positions) ===
-    // Config entries get 8 bytes of gap padding before their table
     let config_offsets: Vec<_> = config_log
         .iter()
         .map(|e| build_log_entry_with_gap(&mut b, e, 8))
         .collect();
-    let script_offsets: Vec<_> = script_log
-        .iter()
-        .map(|e| build_log_entry(&mut b, e))
-        .collect();
+    let script_offsets: Vec<_> = script_log.iter().map(|e| build_log_entry(&mut b, e)).collect();
     let style_offsets: Vec<_> = styles.iter().map(|e| build_log_entry(&mut b, e)).collect();
 
-    // === PHASE 2: Language STRING DATA only (no tables yet) ===
     let mut lang_data: Vec<LangStrings> = Vec::new();
     for lang in languages {
         let translations = match &lang.translations {
@@ -161,31 +149,16 @@ fn build_inner_flatbuffer(
         });
     }
 
-    // === PHASE 3: extra_data ===
-    // Rehydrate persisted type7 state if present. The stored blob is
-    // base64(MessagePack); we decode it to a serde_json::Value and then write
-    // compact JSON bytes into the module's extra_data vector.
     b.push_zeros(4);
-    let extra_data = match type7_blob
-        .map(|blob| decode_type7_blob(blob))
-        .transpose()? {
+    let extra_data = match type7_blob.map(decode_type7_blob).transpose()? {
         Some(json_bytes) => b.create_vector_u8(&json_bytes),
         None => b.create_vector_u8(&[]),
     };
 
-    // === PHASE 3.5: Orphaned "admin" string ===
-    // The C++ builder creates a default author "admin" that ends up unreferenced.
     let _orphaned_admin = b.create_string("admin");
-
-    // === PHASE 4: skin_data (raw MsgPack bytes from DB) ===
     let skin_data = b.create_vector_u8(&base.skin_data_msgpack);
-
-    // === PHASE 5: auth_token string ===
     let auth_token = b.create_string(config::MODULE_AUTH_TOKEN);
 
-    // === PHASE 6: Language TABLES (referencing strings from Phase 2) ===
-    // Creation order [0, 3, 2, 1, 4] matches the original builder so that
-    // lang[3] absorbs 2-byte alignment padding from lang[0]'s 18-byte vtable.
     let lang_offsets = if lang_data.len() == 5 {
         let creation_order: &[usize] = &[0, 3, 2, 1, 4];
         let mut offsets = vec![Ref::dummy(); lang_data.len()];
@@ -194,29 +167,25 @@ fn build_inner_flatbuffer(
         }
         offsets
     } else {
-        // Fallback: sequential order for non-standard language counts
         lang_data
             .iter()
             .map(|ls| build_lang_table(&mut b, ls))
             .collect()
     };
 
-    // === PHASE 7: Vector offset arrays ===
     let lang_vec = b.create_vector_offsets(&lang_offsets);
     let script_vec = b.create_vector_offsets(&script_offsets);
     let style_vec = b.create_vector_offsets(&style_offsets);
     let config_vec = b.create_vector_offsets(&config_offsets);
 
-    // === PHASE 8+9: Root table with INLINE author string ===
     b.start_table(13);
     b.table_add_offset(4, config_vec);
     b.table_add_offset(5, script_vec);
     b.table_add_offset(6, style_vec);
     b.table_add_offset(7, lang_vec);
     b.table_add_offset(1, extra_data);
-    // Keep the observed padding before the inline author string.
     b.push_zeros(4);
-    let author = b.create_string(username); // INLINE
+    let author = b.create_string(username);
     b.table_add_offset(2, author);
     b.table_add_offset(9, skin_data);
     b.table_add_u32(3, base.checksum as u32, 0);

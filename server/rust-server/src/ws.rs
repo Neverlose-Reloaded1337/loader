@@ -38,7 +38,6 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
         addr
     );
 
-    // Wait for client's first message — contains "token\nclient\ngame"
     let first = socket.recv().await;
     let token = match first {
         Some(Ok(ref msg)) => {
@@ -65,15 +64,9 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
 
     tracing::info!("[WS] Token from first message: {token}");
 
-    // Store IP → token mapping for avatar lookups
-    state
-        .ip_tokens
-        .write()
-        .await
-        .insert(addr.ip(), token.clone());
-    tracing::info!("[WS] Stored IP→token mapping: {} → {}", addr.ip(), token);
+    state.ip_tokens.write().await.insert(addr.ip(), token.clone());
+    tracing::info!("[WS] Stored IP->token mapping: {} -> {}", addr.ip(), token);
 
-    // Frame 1: Auth JSON
     let auth = json!({
         "Type": "Auth",
         "Message": AUTH_MESSAGE,
@@ -89,7 +82,6 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
         return;
     }
 
-    // Frame 2: module blob — raw file override or build from DB
     let module_bin = if let Some(ref raw) = state.raw_module {
         tracing::info!("[WS] Using raw module override ({} bytes)", raw.len());
         raw.clone()
@@ -113,7 +105,6 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
         return;
     }
 
-    // Frame 3: Key blob
     tracing::info!("[WS] -> Key blob ({} bytes)", KEY_BIN.len());
     if socket
         .send(Message::Binary(KEY_BIN.to_vec().into()))
@@ -126,7 +117,6 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
 
     tracing::info!("[WS] All 3 frames sent, processing client messages...");
 
-    // Look up user for DB operations
     let user = match db::get_user_by_auth_token(&state.db, &token).await {
         Ok(Some(u)) => u,
         Ok(None) => {
@@ -245,7 +235,6 @@ async fn handle_binary_msg(
 
     let prefix = format!("[WS] Msg #{msg_num}");
 
-    // Decrypt + decompress
     let decompressed = match pipeline::decrypt(data) {
         Ok(decrypted) => match pipeline::decompress(&decrypted) {
             Ok(d) => d,
@@ -260,7 +249,6 @@ async fn handle_binary_msg(
         }
     };
 
-    // Parse as client message
     match crate::client_msg::parse(&decompressed) {
         Ok(msg) => {
             tracing::info!("{prefix} parsed: {msg:?}");
@@ -348,7 +336,6 @@ pub async fn push_live_insert(
     Ok(sent)
 }
 
-/// Handle a parsed client message. Returns a FlatBuffer reply to send back, if any.
 async fn handle_client_msg(
     state: &AppState,
     user: &crate::models::UserRow,
@@ -362,7 +349,6 @@ async fn handle_client_msg(
             tracing::info!("{prefix} Init: steam_id={steam_id} user={}", user.username);
             None
         }
-
         ClientMsg::ConfigAck { entry_id } => {
             tracing::info!(
                 "{prefix} ConfigAck: entry_id={entry_id} user={}",
@@ -377,10 +363,7 @@ async fn handle_client_msg(
                 }
             };
 
-            let config = match configs
-                .iter()
-                .find(|config| config.entry_id == *entry_id as i32)
-            {
+            let config = match configs.iter().find(|config| config.entry_id == *entry_id as i32) {
                 Some(row) => row,
                 None => {
                     tracing::warn!(
@@ -404,7 +387,6 @@ async fn handle_client_msg(
                 }
             }
         }
-
         ClientMsg::CreateEntry {
             name,
             entry_type,
@@ -426,7 +408,6 @@ async fn handle_client_msg(
                 }
             }
 
-            // Assign next entry_id
             let entry_id = match db::next_entry_id(&state.db, user.id).await {
                 Ok(id) => id,
                 Err(e) => {
@@ -440,22 +421,14 @@ async fn handle_client_msg(
                 .unwrap_or_default()
                 .as_secs() as i32;
 
-            // Create log entry
-            if let Err(e) = db::create_log_entry(
-                &state.db,
-                user.id,
-                entry_id,
-                now_ts,
-                type_str,
-                &user.username,
-            )
-            .await
+            if let Err(e) =
+                db::create_log_entry(&state.db, user.id, entry_id, now_ts, type_str, &user.username)
+                    .await
             {
                 tracing::error!("{prefix} failed to create log entry: {e}");
                 return None;
             }
 
-            // Create backing row for the new entry.
             if let Err(e) = create_entry_row(&state.db, user.id, entry_id, *entry_type, name).await
             {
                 tracing::error!("{prefix} failed to create {type_str}: {e}");
@@ -476,7 +449,6 @@ async fn handle_client_msg(
 
             tracing::info!("{prefix} Created entry_id={entry_id} type={type_str} name={name:?}");
 
-            // Build the live-insert response using the standard LogEntry vector shape.
             match build_create_response(
                 entry_id as u32,
                 now_ts as u32,
@@ -492,7 +464,6 @@ async fn handle_client_msg(
                 }
             }
         }
-
         ClientMsg::UpdateEntry {
             entry_id,
             entry_type,
@@ -507,7 +478,6 @@ async fn handle_client_msg(
                 user.username
             );
 
-            // Update log entry timestamp if provided
             if let Some(ts) = timestamp {
                 if let Err(e) =
                     db::update_log_entry_timestamp(&state.db, user.id, *entry_id as i32, *ts as i32)
@@ -551,7 +521,6 @@ async fn handle_client_msg(
 
             None
         }
-
         ClientMsg::DuplicateEntry {
             entry_id,
             entry_type,
@@ -576,8 +545,7 @@ async fn handle_client_msg(
                 .unwrap_or_default()
                 .as_secs() as i32;
 
-            let source_author = match db::get_user_log_entry(&state.db, user.id, *entry_id as i32)
-                .await
+            let source_author = match db::get_user_log_entry(&state.db, user.id, *entry_id as i32).await
             {
                 Ok(Some(entry)) => entry.author,
                 Ok(None) => {
@@ -609,15 +577,9 @@ async fn handle_client_msg(
                 None => return None,
             };
 
-            if let Err(e) = db::create_log_entry(
-                &state.db,
-                user.id,
-                new_entry_id,
-                now_ts,
-                type_str,
-                &source_author,
-            )
-            .await
+            if let Err(e) =
+                db::create_log_entry(&state.db, user.id, new_entry_id, now_ts, type_str, &source_author)
+                    .await
             {
                 tracing::error!("{prefix} failed to create duplicate log entry: {e}");
                 return None;
@@ -642,7 +604,6 @@ async fn handle_client_msg(
                 }
             }
         }
-
         ClientMsg::DeleteEntry {
             entry_id,
             entry_type,
@@ -670,13 +631,14 @@ async fn handle_client_msg(
                 }
             }
 
-            if let Err(e) = db::delete_log_entry_by_user_entry_id(&state.db, user.id, *entry_id as i32).await {
+            if let Err(e) =
+                db::delete_log_entry_by_user_entry_id(&state.db, user.id, *entry_id as i32).await
+            {
                 tracing::error!("{prefix} failed to delete log entry: {e}");
             }
 
             None
         }
-
         ClientMsg::Unknown { msg_type, .. } => {
             if *msg_type == 7 {
                 tracing::info!("{prefix} type7 received");
@@ -709,12 +671,17 @@ async fn save_type7_blob(
 
 fn extract_type7_blob_text(payload: &[u8]) -> anyhow::Result<String> {
     fn is_b64ish(b: u8) -> bool {
-        matches!(b,
-            b'A'..=b'Z' |
-            b'a'..=b'z' |
-            b'0'..=b'9' |
-            b'+' | b'/' | b'=' |
-            b'-' | b'_')
+        matches!(
+            b,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'+'
+                | b'/'
+                | b'='
+                | b'-'
+                | b'_'
+        )
     }
 
     let mut best = (0usize, 0usize);
@@ -766,7 +733,7 @@ fn entry_type_id_from_name(entry_type: &str) -> u32 {
 }
 
 async fn create_entry_row(
-    db_pool: &sqlx::PgPool,
+    db_pool: &sqlx::SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     entry_type: u32,
@@ -875,8 +842,7 @@ async fn duplicate_entry_content(
                 }
             };
             let duplicate_name = duplicate_name(requested_name, &source.name);
-            if let Err(e) =
-                db::create_script(&state.db, user.id, new_entry_id, &duplicate_name).await
+            if let Err(e) = db::create_script(&state.db, user.id, new_entry_id, &duplicate_name).await
             {
                 tracing::error!("{prefix} failed to create duplicate script: {e}");
                 return None;
@@ -904,8 +870,7 @@ async fn duplicate_entry_content(
                 }
             };
             let duplicate_name = duplicate_name(requested_name, &source.name);
-            if let Err(e) =
-                db::create_style(&state.db, user.id, new_entry_id, &duplicate_name).await
+            if let Err(e) = db::create_style(&state.db, user.id, new_entry_id, &duplicate_name).await
             {
                 tracing::error!("{prefix} failed to create duplicate style: {e}");
                 return None;
@@ -933,8 +898,7 @@ async fn duplicate_entry_content(
                 }
             };
             let duplicate_name = duplicate_name(requested_name, &source.name);
-            if let Err(e) =
-                db::create_config(&state.db, user.id, new_entry_id, &duplicate_name).await
+            if let Err(e) = db::create_config(&state.db, user.id, new_entry_id, &duplicate_name).await
             {
                 tracing::error!("{prefix} failed to create duplicate config: {e}");
                 return None;
@@ -1004,7 +968,7 @@ fn build_create_response(
     let mut ob = FlatccBuilder::new();
     let payload = ob.create_vector_u8(&inner_bytes);
     ob.start_table(2);
-    ob.table_add_u32(0, 3, 0); // type = 3
+    ob.table_add_u32(0, 3, 0);
     ob.table_add_offset(1, payload);
     let wrapper = ob.end_table();
     Ok(ob.finish_minimal(wrapper))
@@ -1018,7 +982,7 @@ fn build_case11_response(entry_id: u32, payload: &str) -> anyhow::Result<Vec<u8>
     let mut ob = FlatccBuilder::new();
     let payload_vec = ob.create_vector_u8(&inner_bytes);
     ob.start_table(2);
-    ob.table_add_u32(0, 11, 0); // type = 11
+    ob.table_add_u32(0, 11, 0);
     ob.table_add_offset(1, payload_vec);
     let wrapper = ob.end_table();
     Ok(ob.finish_minimal(wrapper))

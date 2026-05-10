@@ -1,31 +1,31 @@
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::models::{
     BaseModuleRow, ConfigRow, LogEntryRow, ScriptRow, ShareCodeRow, StyleRow, UserRow,
 };
 
-// ── Users ──
+const NOW_SQL: &str = "STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
-pub async fn get_user_by_auth_token(pool: &PgPool, token: &str) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE auth_token = $1")
+pub async fn get_user_by_auth_token(pool: &SqlitePool, token: &str) -> Result<Option<UserRow>> {
+    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE auth_token = ?")
         .bind(token)
         .fetch_optional(pool)
         .await?;
     Ok(user)
 }
 
-pub async fn get_user_by_username(pool: &PgPool, username: &str) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE username = $1")
+pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<Option<UserRow>> {
+    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE username = ?")
         .bind(username)
         .fetch_optional(pool)
         .await?;
     Ok(user)
 }
 
-pub async fn get_user_by_id(pool: &PgPool, id: Uuid) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE id = $1")
+pub async fn get_user_by_id(pool: &SqlitePool, id: Uuid) -> Result<Option<UserRow>> {
+    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -33,16 +33,19 @@ pub async fn get_user_by_id(pool: &PgPool, id: Uuid) -> Result<Option<UserRow>> 
 }
 
 pub async fn create_user(
-    pool: &PgPool,
+    pool: &SqlitePool,
     username: &str,
     auth_token: &str,
     base_module_id: Uuid,
     serial: &str,
 ) -> Result<UserRow> {
+    let id = Uuid::new_v4();
     let user = sqlx::query_as::<_, UserRow>(
-        "INSERT INTO users (username, auth_token, base_module_id, serial)
-         VALUES ($1, $2, $3, $4) RETURNING *",
+        "INSERT INTO users (id, username, auth_token, base_module_id, serial)
+         VALUES (?, ?, ?, ?, ?)
+         RETURNING *",
     )
+    .bind(id)
     .bind(username)
     .bind(auth_token)
     .bind(base_module_id)
@@ -53,17 +56,20 @@ pub async fn create_user(
 }
 
 pub async fn create_user_with_password_hash(
-    pool: &PgPool,
+    pool: &SqlitePool,
     username: &str,
     password_hash: &str,
     base_module_id: Uuid,
     serial: &str,
 ) -> Result<UserRow> {
+    let id = Uuid::new_v4();
     let auth_token = Uuid::new_v4().to_string();
     let user = sqlx::query_as::<_, UserRow>(
-        "INSERT INTO users (username, auth_token, base_module_id, serial, password_hash)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        "INSERT INTO users (id, username, auth_token, base_module_id, serial, password_hash)
+         VALUES (?, ?, ?, ?, ?, ?)
+         RETURNING *",
     )
+    .bind(id)
     .bind(username)
     .bind(auth_token)
     .bind(base_module_id)
@@ -75,52 +81,52 @@ pub async fn create_user_with_password_hash(
 }
 
 pub async fn update_user_avatar(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     avatar_png: Option<&[u8]>,
 ) -> Result<Option<UserRow>> {
-    let user =
-        sqlx::query_as::<_, UserRow>("UPDATE users SET avatar_png = $2 WHERE id = $1 RETURNING *")
-            .bind(user_id)
-            .bind(avatar_png)
-            .fetch_optional(pool)
-            .await?;
-    Ok(user)
-}
-
-pub async fn update_user_type7_blob(
-    pool: &PgPool,
-    user_id: Uuid,
-    type7_blob: Option<&str>,
-) -> Result<Option<UserRow>> {
     let user = sqlx::query_as::<_, UserRow>(
-        "UPDATE users SET type7_blob = $2, type7_updated_at = NOW() WHERE id = $1 RETURNING *",
+        "UPDATE users SET avatar_png = ? WHERE id = ? RETURNING *",
     )
+    .bind(avatar_png)
     .bind(user_id)
-    .bind(type7_blob)
     .fetch_optional(pool)
     .await?;
     Ok(user)
 }
 
-pub async fn list_users(pool: &PgPool) -> Result<Vec<UserRow>> {
+pub async fn update_user_type7_blob(
+    pool: &SqlitePool,
+    user_id: Uuid,
+    type7_blob: Option<&str>,
+) -> Result<Option<UserRow>> {
+    let sql = format!(
+        "UPDATE users SET type7_blob = ?, type7_updated_at = {NOW_SQL} WHERE id = ? RETURNING *"
+    );
+    let user = sqlx::query_as::<_, UserRow>(&sql)
+        .bind(type7_blob)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(user)
+}
+
+pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>> {
     let users = sqlx::query_as::<_, UserRow>("SELECT * FROM users ORDER BY created_at")
         .fetch_all(pool)
         .await?;
     Ok(users)
 }
 
-// ── Base modules ──
-
-pub async fn get_base_module(pool: &PgPool, id: Uuid) -> Result<Option<BaseModuleRow>> {
-    let module = sqlx::query_as::<_, BaseModuleRow>("SELECT * FROM base_modules WHERE id = $1")
+pub async fn get_base_module(pool: &SqlitePool, id: Uuid) -> Result<Option<BaseModuleRow>> {
+    let module = sqlx::query_as::<_, BaseModuleRow>("SELECT * FROM base_modules WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
         .await?;
     Ok(module)
 }
 
-pub async fn get_first_base_module(pool: &PgPool) -> Result<Option<BaseModuleRow>> {
+pub async fn get_first_base_module(pool: &SqlitePool) -> Result<Option<BaseModuleRow>> {
     let module = sqlx::query_as::<_, BaseModuleRow>(
         "SELECT * FROM base_modules ORDER BY created_at, id LIMIT 1",
     )
@@ -130,7 +136,7 @@ pub async fn get_first_base_module(pool: &PgPool) -> Result<Option<BaseModuleRow
 }
 
 pub async fn insert_base_module(
-    pool: &PgPool,
+    pool: &SqlitePool,
     name: &str,
     version: i32,
     author: &str,
@@ -140,13 +146,15 @@ pub async fn insert_base_module(
     skin_data_msgpack: &[u8],
     languages_json: &serde_json::Value,
 ) -> Result<BaseModuleRow> {
-    // Serialize to string and bind as text so PostgreSQL stores the raw JSON
-    // without JSONB normalization (which reorders keys alphabetically).
+    let id = Uuid::new_v4();
     let json_text = serde_json::to_string(languages_json)?;
     let module = sqlx::query_as::<_, BaseModuleRow>(
-        "INSERT INTO base_modules (name, version, author, checksum, buffer_capacity, enabled, skin_data_msgpack, languages_json)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::json) RETURNING *",
+        "INSERT INTO base_modules (
+            id, name, version, author, checksum, buffer_capacity, enabled, skin_data_msgpack, languages_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING *",
     )
+    .bind(id)
     .bind(name)
     .bind(version)
     .bind(author)
@@ -161,7 +169,7 @@ pub async fn insert_base_module(
 }
 
 pub async fn upsert_base_module(
-    pool: &PgPool,
+    pool: &SqlitePool,
     name: &str,
     version: i32,
     author: &str,
@@ -171,39 +179,41 @@ pub async fn upsert_base_module(
     skin_data_msgpack: &[u8],
     languages_json: &serde_json::Value,
 ) -> Result<BaseModuleRow> {
+    let id = Uuid::new_v4();
     let json_text = serde_json::to_string(languages_json)?;
-    let module = sqlx::query_as::<_, BaseModuleRow>(
-        "INSERT INTO base_modules (name, version, author, checksum, buffer_capacity, enabled, skin_data_msgpack, languages_json)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::json)
-         ON CONFLICT (name) DO UPDATE SET
-             version = EXCLUDED.version,
-             author = EXCLUDED.author,
-             checksum = EXCLUDED.checksum,
-             buffer_capacity = EXCLUDED.buffer_capacity,
-             enabled = EXCLUDED.enabled,
-             skin_data_msgpack = EXCLUDED.skin_data_msgpack,
-             languages_json = EXCLUDED.languages_json,
-             updated_at = NOW()
-         RETURNING *",
-    )
-    .bind(name)
-    .bind(version)
-    .bind(author)
-    .bind(checksum)
-    .bind(buffer_capacity)
-    .bind(enabled)
-    .bind(skin_data_msgpack)
-    .bind(&json_text)
-    .fetch_one(pool)
-    .await?;
+    let sql = format!(
+        "INSERT INTO base_modules (
+            id, name, version, author, checksum, buffer_capacity, enabled, skin_data_msgpack, languages_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+            version = excluded.version,
+            author = excluded.author,
+            checksum = excluded.checksum,
+            buffer_capacity = excluded.buffer_capacity,
+            enabled = excluded.enabled,
+            skin_data_msgpack = excluded.skin_data_msgpack,
+            languages_json = excluded.languages_json,
+            updated_at = {NOW_SQL}
+         RETURNING *"
+    );
+    let module = sqlx::query_as::<_, BaseModuleRow>(&sql)
+        .bind(id)
+        .bind(name)
+        .bind(version)
+        .bind(author)
+        .bind(checksum)
+        .bind(buffer_capacity)
+        .bind(enabled)
+        .bind(skin_data_msgpack)
+        .bind(&json_text)
+        .fetch_one(pool)
+        .await?;
     Ok(module)
 }
 
-// ── Log entries ──
-
-pub async fn get_user_log_entries(pool: &PgPool, user_id: Uuid) -> Result<Vec<LogEntryRow>> {
+pub async fn get_user_log_entries(pool: &SqlitePool, user_id: Uuid) -> Result<Vec<LogEntryRow>> {
     let entries = sqlx::query_as::<_, LogEntryRow>(
-        "SELECT * FROM log_entries WHERE user_id = $1 ORDER BY entry_id",
+        "SELECT * FROM log_entries WHERE user_id = ? ORDER BY entry_id",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -212,12 +222,12 @@ pub async fn get_user_log_entries(pool: &PgPool, user_id: Uuid) -> Result<Vec<Lo
 }
 
 pub async fn get_user_log_entry(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
 ) -> Result<Option<LogEntryRow>> {
     let entry = sqlx::query_as::<_, LogEntryRow>(
-        "SELECT * FROM log_entries WHERE user_id = $1 AND entry_id = $2",
+        "SELECT * FROM log_entries WHERE user_id = ? AND entry_id = ?",
     )
     .bind(user_id)
     .bind(entry_id)
@@ -227,17 +237,20 @@ pub async fn get_user_log_entry(
 }
 
 pub async fn create_log_entry(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     timestamp: i32,
     entry_type: &str,
     author: &str,
 ) -> Result<LogEntryRow> {
+    let id = Uuid::new_v4();
     let entry = sqlx::query_as::<_, LogEntryRow>(
-        "INSERT INTO log_entries (user_id, entry_id, timestamp, entry_type, author)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        "INSERT INTO log_entries (id, user_id, entry_id, timestamp, entry_type, author)
+         VALUES (?, ?, ?, ?, ?, ?)
+         RETURNING *",
     )
+    .bind(id)
     .bind(user_id)
     .bind(entry_id)
     .bind(timestamp)
@@ -249,7 +262,7 @@ pub async fn create_log_entry(
 }
 
 pub async fn update_log_entry(
-    pool: &PgPool,
+    pool: &SqlitePool,
     id: Uuid,
     entry_id: i32,
     timestamp: i32,
@@ -257,21 +270,23 @@ pub async fn update_log_entry(
     author: &str,
 ) -> Result<Option<LogEntryRow>> {
     let entry = sqlx::query_as::<_, LogEntryRow>(
-        "UPDATE log_entries SET entry_id = $2, timestamp = $3, entry_type = $4, author = $5
-         WHERE id = $1 RETURNING *",
+        "UPDATE log_entries
+         SET entry_id = ?, timestamp = ?, entry_type = ?, author = ?
+         WHERE id = ?
+         RETURNING *",
     )
-    .bind(id)
     .bind(entry_id)
     .bind(timestamp)
     .bind(entry_type)
     .bind(author)
+    .bind(id)
     .fetch_optional(pool)
     .await?;
     Ok(entry)
 }
 
-pub async fn delete_log_entry(pool: &PgPool, id: Uuid) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM log_entries WHERE id = $1")
+pub async fn delete_log_entry(pool: &SqlitePool, id: Uuid) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM log_entries WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
@@ -279,11 +294,11 @@ pub async fn delete_log_entry(pool: &PgPool, id: Uuid) -> Result<bool> {
 }
 
 pub async fn delete_log_entry_by_user_entry_id(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
 ) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM log_entries WHERE user_id = $1 AND entry_id = $2")
+    let result = sqlx::query("DELETE FROM log_entries WHERE user_id = ? AND entry_id = ?")
         .bind(user_id)
         .bind(entry_id)
         .execute(pool)
@@ -292,35 +307,33 @@ pub async fn delete_log_entry_by_user_entry_id(
 }
 
 pub async fn update_log_entry_timestamp(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     timestamp: i32,
 ) -> Result<bool> {
-    let result =
-        sqlx::query("UPDATE log_entries SET timestamp = $3 WHERE user_id = $1 AND entry_id = $2")
-            .bind(user_id)
-            .bind(entry_id)
-            .bind(timestamp)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query(
+        "UPDATE log_entries SET timestamp = ? WHERE user_id = ? AND entry_id = ?",
+    )
+    .bind(timestamp)
+    .bind(user_id)
+    .bind(entry_id)
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected() > 0)
 }
 
-// ── Scripts ──
-
-pub async fn next_entry_id(pool: &PgPool, user_id: Uuid) -> Result<i32> {
-    let row: (Option<i32>,) =
-        sqlx::query_as("SELECT MAX(entry_id) FROM log_entries WHERE user_id = $1")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?;
+pub async fn next_entry_id(pool: &SqlitePool, user_id: Uuid) -> Result<i32> {
+    let row: (Option<i32>,) = sqlx::query_as("SELECT MAX(entry_id) FROM log_entries WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
     Ok(row.0.unwrap_or(0) + 1)
 }
 
-pub async fn get_user_scripts(pool: &PgPool, user_id: Uuid) -> Result<Vec<ScriptRow>> {
+pub async fn get_user_scripts(pool: &SqlitePool, user_id: Uuid) -> Result<Vec<ScriptRow>> {
     let scripts = sqlx::query_as::<_, ScriptRow>(
-        "SELECT * FROM scripts WHERE user_id = $1 ORDER BY entry_id",
+        "SELECT * FROM scripts WHERE user_id = ? ORDER BY entry_id",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -329,12 +342,12 @@ pub async fn get_user_scripts(pool: &PgPool, user_id: Uuid) -> Result<Vec<Script
 }
 
 pub async fn get_user_script_by_name(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     name: &str,
 ) -> Result<Option<ScriptRow>> {
     let script = sqlx::query_as::<_, ScriptRow>(
-        "SELECT * FROM scripts WHERE user_id = $1 AND name = $2 ORDER BY updated_at DESC LIMIT 1",
+        "SELECT * FROM scripts WHERE user_id = ? AND name = ? ORDER BY updated_at DESC LIMIT 1",
     )
     .bind(user_id)
     .bind(name)
@@ -344,12 +357,12 @@ pub async fn get_user_script_by_name(
 }
 
 pub async fn get_user_script(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
 ) -> Result<Option<ScriptRow>> {
     let script = sqlx::query_as::<_, ScriptRow>(
-        "SELECT * FROM scripts WHERE user_id = $1 AND entry_id = $2",
+        "SELECT * FROM scripts WHERE user_id = ? AND entry_id = ?",
     )
     .bind(user_id)
     .bind(entry_id)
@@ -358,9 +371,9 @@ pub async fn get_user_script(
     Ok(script)
 }
 
-pub async fn get_user_configs(pool: &PgPool, user_id: Uuid) -> Result<Vec<ConfigRow>> {
+pub async fn get_user_configs(pool: &SqlitePool, user_id: Uuid) -> Result<Vec<ConfigRow>> {
     let configs = sqlx::query_as::<_, ConfigRow>(
-        "SELECT * FROM configs WHERE user_id = $1 ORDER BY entry_id",
+        "SELECT * FROM configs WHERE user_id = ? ORDER BY entry_id",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -368,9 +381,9 @@ pub async fn get_user_configs(pool: &PgPool, user_id: Uuid) -> Result<Vec<Config
     Ok(configs)
 }
 
-pub async fn get_user_styles(pool: &PgPool, user_id: Uuid) -> Result<Vec<StyleRow>> {
+pub async fn get_user_styles(pool: &SqlitePool, user_id: Uuid) -> Result<Vec<StyleRow>> {
     let styles =
-        sqlx::query_as::<_, StyleRow>("SELECT * FROM styles WHERE user_id = $1 ORDER BY entry_id")
+        sqlx::query_as::<_, StyleRow>("SELECT * FROM styles WHERE user_id = ? ORDER BY entry_id")
             .bind(user_id)
             .fetch_all(pool)
             .await?;
@@ -378,12 +391,12 @@ pub async fn get_user_styles(pool: &PgPool, user_id: Uuid) -> Result<Vec<StyleRo
 }
 
 pub async fn get_user_style(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
 ) -> Result<Option<StyleRow>> {
     let style =
-        sqlx::query_as::<_, StyleRow>("SELECT * FROM styles WHERE user_id = $1 AND entry_id = $2")
+        sqlx::query_as::<_, StyleRow>("SELECT * FROM styles WHERE user_id = ? AND entry_id = ?")
             .bind(user_id)
             .bind(entry_id)
             .fetch_optional(pool)
@@ -392,14 +405,18 @@ pub async fn get_user_style(
 }
 
 pub async fn create_script(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     name: &str,
 ) -> Result<ScriptRow> {
+    let id = Uuid::new_v4();
     let script = sqlx::query_as::<_, ScriptRow>(
-        "INSERT INTO scripts (user_id, entry_id, name) VALUES ($1, $2, $3) RETURNING *",
+        "INSERT INTO scripts (id, user_id, entry_id, name)
+         VALUES (?, ?, ?, ?)
+         RETURNING *",
     )
+    .bind(id)
     .bind(user_id)
     .bind(entry_id)
     .bind(name)
@@ -409,14 +426,18 @@ pub async fn create_script(
 }
 
 pub async fn create_config(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     name: &str,
 ) -> Result<ConfigRow> {
+    let id = Uuid::new_v4();
     let config = sqlx::query_as::<_, ConfigRow>(
-        "INSERT INTO configs (user_id, entry_id, name) VALUES ($1, $2, $3) RETURNING *",
+        "INSERT INTO configs (id, user_id, entry_id, name)
+         VALUES (?, ?, ?, ?)
+         RETURNING *",
     )
+    .bind(id)
     .bind(user_id)
     .bind(entry_id)
     .bind(name)
@@ -426,131 +447,131 @@ pub async fn create_config(
 }
 
 pub async fn create_style(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     name: &str,
 ) -> Result<StyleRow> {
-    let style = sqlx::query_as::<_, StyleRow>(
-        "INSERT INTO styles (user_id, entry_id, name)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, entry_id) DO UPDATE SET
-             name = EXCLUDED.name,
-             updated_at = NOW()
-         RETURNING *",
-    )
-    .bind(user_id)
-    .bind(entry_id)
-    .bind(name)
-    .fetch_one(pool)
-    .await?;
+    let id = Uuid::new_v4();
+    let sql = format!(
+        "INSERT INTO styles (id, user_id, entry_id, name)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, entry_id) DO UPDATE SET
+             name = excluded.name,
+             updated_at = {NOW_SQL}
+         RETURNING *"
+    );
+    let style = sqlx::query_as::<_, StyleRow>(&sql)
+        .bind(id)
+        .bind(user_id)
+        .bind(entry_id)
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
     Ok(style)
 }
 
 pub async fn update_script_name(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     name: &str,
 ) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE scripts SET name = $3, updated_at = NOW() WHERE user_id = $1 AND entry_id = $2",
-    )
-    .bind(user_id)
-    .bind(entry_id)
-    .bind(name)
-    .execute(pool)
-    .await?;
+    let sql = format!(
+        "UPDATE scripts SET name = ?, updated_at = {NOW_SQL} WHERE user_id = ? AND entry_id = ?"
+    );
+    let result = sqlx::query(&sql)
+        .bind(name)
+        .bind(user_id)
+        .bind(entry_id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_config_name(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     name: &str,
 ) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE configs SET name = $3, updated_at = NOW() WHERE user_id = $1 AND entry_id = $2",
-    )
-    .bind(user_id)
-    .bind(entry_id)
-    .bind(name)
-    .execute(pool)
-    .await?;
+    let sql = format!(
+        "UPDATE configs SET name = ?, updated_at = {NOW_SQL} WHERE user_id = ? AND entry_id = ?"
+    );
+    let result = sqlx::query(&sql)
+        .bind(name)
+        .bind(user_id)
+        .bind(entry_id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_style_name(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     name: &str,
 ) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE styles SET name = $3, updated_at = NOW() WHERE user_id = $1 AND entry_id = $2",
-    )
-    .bind(user_id)
-    .bind(entry_id)
-    .bind(name)
-    .execute(pool)
-    .await?;
+    let sql = format!(
+        "UPDATE styles SET name = ?, updated_at = {NOW_SQL} WHERE user_id = ? AND entry_id = ?"
+    );
+    let result = sqlx::query(&sql)
+        .bind(name)
+        .bind(user_id)
+        .bind(entry_id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_script_content(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     content: &str,
 ) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE scripts SET content = $3, updated_at = NOW() WHERE user_id = $1 AND entry_id = $2",
-    )
-    .bind(user_id)
-    .bind(entry_id)
-    .bind(content)
-    .execute(pool)
-    .await?;
+    let sql = format!(
+        "UPDATE scripts SET content = ?, updated_at = {NOW_SQL} WHERE user_id = ? AND entry_id = ?"
+    );
+    let result = sqlx::query(&sql)
+        .bind(content)
+        .bind(user_id)
+        .bind(entry_id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_config_content(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     content: &str,
 ) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE configs SET content = $3, updated_at = NOW() WHERE user_id = $1 AND entry_id = $2",
-    )
-    .bind(user_id)
-    .bind(entry_id)
-    .bind(content)
-    .execute(pool)
-    .await?;
+    let sql = format!(
+        "UPDATE configs SET content = ?, updated_at = {NOW_SQL} WHERE user_id = ? AND entry_id = ?"
+    );
+    let result = sqlx::query(&sql)
+        .bind(content)
+        .bind(user_id)
+        .bind(entry_id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_style_content(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
     content: &str,
 ) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE styles SET content = $3, updated_at = NOW() WHERE user_id = $1 AND entry_id = $2",
-    )
-    .bind(user_id)
-    .bind(entry_id)
-    .bind(content)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected() > 0)
-}
-
-pub async fn delete_script(pool: &PgPool, user_id: Uuid, entry_id: i32) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM scripts WHERE user_id = $1 AND entry_id = $2")
+    let sql = format!(
+        "UPDATE styles SET content = ?, updated_at = {NOW_SQL} WHERE user_id = ? AND entry_id = ?"
+    );
+    let result = sqlx::query(&sql)
+        .bind(content)
         .bind(user_id)
         .bind(entry_id)
         .execute(pool)
@@ -558,8 +579,8 @@ pub async fn delete_script(pool: &PgPool, user_id: Uuid, entry_id: i32) -> Resul
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn delete_config(pool: &PgPool, user_id: Uuid, entry_id: i32) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM configs WHERE user_id = $1 AND entry_id = $2")
+pub async fn delete_script(pool: &SqlitePool, user_id: Uuid, entry_id: i32) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM scripts WHERE user_id = ? AND entry_id = ?")
         .bind(user_id)
         .bind(entry_id)
         .execute(pool)
@@ -567,8 +588,17 @@ pub async fn delete_config(pool: &PgPool, user_id: Uuid, entry_id: i32) -> Resul
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn delete_style(pool: &PgPool, user_id: Uuid, entry_id: i32) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM styles WHERE user_id = $1 AND entry_id = $2")
+pub async fn delete_config(pool: &SqlitePool, user_id: Uuid, entry_id: i32) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM configs WHERE user_id = ? AND entry_id = ?")
+        .bind(user_id)
+        .bind(entry_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn delete_style(pool: &SqlitePool, user_id: Uuid, entry_id: i32) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM styles WHERE user_id = ? AND entry_id = ?")
         .bind(user_id)
         .bind(entry_id)
         .execute(pool)
@@ -577,12 +607,12 @@ pub async fn delete_style(pool: &PgPool, user_id: Uuid, entry_id: i32) -> Result
 }
 
 pub async fn get_user_config(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     entry_id: i32,
 ) -> Result<Option<ConfigRow>> {
     let config = sqlx::query_as::<_, ConfigRow>(
-        "SELECT * FROM configs WHERE user_id = $1 AND entry_id = $2",
+        "SELECT * FROM configs WHERE user_id = ? AND entry_id = ?",
     )
     .bind(user_id)
     .bind(entry_id)
@@ -592,13 +622,14 @@ pub async fn get_user_config(
 }
 
 pub async fn create_share_code(
-    pool: &PgPool,
+    pool: &SqlitePool,
     user_id: Uuid,
     item_type: &str,
     item_id: Uuid,
     item_name: &str,
 ) -> Result<ShareCodeRow> {
     for _ in 0..5 {
+        let id = Uuid::new_v4();
         let share_code = Uuid::new_v4()
             .simple()
             .to_string()
@@ -607,11 +638,12 @@ pub async fn create_share_code(
             .collect::<String>();
 
         let inserted = sqlx::query_as::<_, ShareCodeRow>(
-            "INSERT INTO share_codes (user_id, share_code, item_type, item_id, item_name)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (share_code) DO NOTHING
+            "INSERT INTO share_codes (id, user_id, share_code, item_type, item_id, item_name)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(share_code) DO NOTHING
              RETURNING *",
         )
+        .bind(id)
         .bind(user_id)
         .bind(&share_code)
         .bind(item_type)
@@ -628,9 +660,9 @@ pub async fn create_share_code(
     anyhow::bail!("failed to generate unique share code")
 }
 
-pub async fn list_user_share_codes(pool: &PgPool, user_id: Uuid) -> Result<Vec<ShareCodeRow>> {
+pub async fn list_user_share_codes(pool: &SqlitePool, user_id: Uuid) -> Result<Vec<ShareCodeRow>> {
     let shares = sqlx::query_as::<_, ShareCodeRow>(
-        "SELECT * FROM share_codes WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT * FROM share_codes WHERE user_id = ? ORDER BY created_at DESC",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -638,17 +670,17 @@ pub async fn list_user_share_codes(pool: &PgPool, user_id: Uuid) -> Result<Vec<S
     Ok(shares)
 }
 
-pub async fn get_share_code(pool: &PgPool, share_code: &str) -> Result<Option<ShareCodeRow>> {
+pub async fn get_share_code(pool: &SqlitePool, share_code: &str) -> Result<Option<ShareCodeRow>> {
     let share =
-        sqlx::query_as::<_, ShareCodeRow>("SELECT * FROM share_codes WHERE share_code = $1")
+        sqlx::query_as::<_, ShareCodeRow>("SELECT * FROM share_codes WHERE share_code = ?")
             .bind(share_code)
             .fetch_optional(pool)
             .await?;
     Ok(share)
 }
 
-pub async fn delete_share_code(pool: &PgPool, share_code: &str) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM share_codes WHERE share_code = $1")
+pub async fn delete_share_code(pool: &SqlitePool, share_code: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM share_codes WHERE share_code = ?")
         .bind(share_code)
         .execute(pool)
         .await?;
@@ -656,7 +688,7 @@ pub async fn delete_share_code(pool: &PgPool, share_code: &str) -> Result<bool> 
 }
 
 pub async fn get_shared_item(
-    pool: &PgPool,
+    pool: &SqlitePool,
     share_code: &str,
 ) -> Result<
     Option<(
@@ -671,7 +703,7 @@ pub async fn get_shared_item(
     };
 
     let script = if share.item_type == "Script" {
-        sqlx::query_as::<_, ScriptRow>("SELECT * FROM scripts WHERE id = $1")
+        sqlx::query_as::<_, ScriptRow>("SELECT * FROM scripts WHERE id = ?")
             .bind(share.item_id)
             .fetch_optional(pool)
             .await?
@@ -680,7 +712,7 @@ pub async fn get_shared_item(
     };
 
     let style = if share.item_type == "Style" {
-        sqlx::query_as::<_, StyleRow>("SELECT * FROM styles WHERE id = $1")
+        sqlx::query_as::<_, StyleRow>("SELECT * FROM styles WHERE id = ?")
             .bind(share.item_id)
             .fetch_optional(pool)
             .await?
@@ -689,7 +721,7 @@ pub async fn get_shared_item(
     };
 
     let config = if share.item_type == "Config" {
-        sqlx::query_as::<_, ConfigRow>("SELECT * FROM configs WHERE id = $1")
+        sqlx::query_as::<_, ConfigRow>("SELECT * FROM configs WHERE id = ?")
             .bind(share.item_id)
             .fetch_optional(pool)
             .await?
