@@ -11,7 +11,6 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -92,7 +91,7 @@ async fn me_handler(State(state): State<AppState>) -> Result<Response, AppError>
         json!({
             "status": "ok",
             "username": user.username,
-            "has_avatar": user.avatar_png.is_some(),
+            "has_avatar": false,
             "avatar_url": "/api/getavatar",
         }),
     ))
@@ -100,25 +99,16 @@ async fn me_handler(State(state): State<AppState>) -> Result<Response, AppError>
 
 async fn update_avatar_handler(
     State(state): State<AppState>,
-    axum::Json(req): axum::Json<AvatarReq>,
+    _payload: Option<axum::Json<serde_json::Value>>,
 ) -> Result<Response, AppError> {
     let user = current_user(&state).await;
-
-    let avatar_png = match req.image_base64.as_deref().map(str::trim) {
-        Some("") | None => None,
-        Some(image_base64) => Some(decode_avatar_png(image_base64)?),
-    };
-
-    let updated_user = db::update_user_avatar(&state.db, user.id, avatar_png.as_deref())
-        .await?
-        .ok_or_else(|| AppError(anyhow::anyhow!("singleton user not found")))?;
-    replace_current_user(&state, updated_user).await;
+    replace_current_user(&state, user).await;
 
     Ok(response_json(
         StatusCode::OK,
         json!({
             "status": "ok",
-            "has_avatar": avatar_png.is_some(),
+            "has_avatar": false,
             "avatar_url": "/api/getavatar",
         }),
     ))
@@ -130,10 +120,7 @@ async fn avatar_handler(
 ) -> impl IntoResponse {
     let size = params.get("size").cloned().unwrap_or_default();
     tracing::info!("[HTTP] GET /api/getavatar size={}", size);
-    let user = current_user(&state).await;
-    if let Some(avatar) = user.avatar_png {
-        return avatar_response(avatar);
-    }
+    let _ = state;
 
     default_avatar()
 }
@@ -707,11 +694,6 @@ fn response_json(status: StatusCode, value: serde_json::Value) -> Response {
 }
 
 #[derive(Deserialize)]
-struct AvatarReq {
-    image_base64: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct ShareReq {
     item_type: String,
     item_id: String,
@@ -793,24 +775,6 @@ async fn current_user(state: &AppState) -> crate::models::UserRow {
 
 async fn replace_current_user(state: &AppState, user: crate::models::UserRow) {
     *state.single_user.write().await = user;
-}
-
-fn decode_avatar_png(image_base64: &str) -> Result<Vec<u8>, AppError> {
-    let payload = image_base64
-        .split_once(',')
-        .map(|(_, data)| data)
-        .unwrap_or(image_base64);
-    let bytes = STANDARD
-        .decode(payload)
-        .map_err(|_| AppError(anyhow::anyhow!("invalid image data")))?;
-    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-    if !bytes.starts_with(PNG_SIGNATURE) {
-        return Err(AppError(anyhow::anyhow!("avatar must be a png image")));
-    }
-    if bytes.len() > 1_500_000 {
-        return Err(AppError(anyhow::anyhow!("avatar is too large")));
-    }
-    Ok(bytes)
 }
 
 // ── Decryption helpers ──
