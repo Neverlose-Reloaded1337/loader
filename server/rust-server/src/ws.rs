@@ -14,7 +14,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::config::{AUTH_DATA, AUTH_MESSAGE, DEFAULT_SERIAL};
+use crate::config::{AUTH_DATA, AUTH_MESSAGE};
 use crate::data::KEY_BIN;
 use crate::{AppState, db, module_builder};
 
@@ -39,13 +39,9 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
     );
 
     let first = socket.recv().await;
-    let token = match first {
+    match first {
         Some(Ok(ref msg)) => {
             tracing::info!("[WS] <- First message: {}", msg_summary(msg));
-            match msg {
-                Message::Text(t) => t.lines().next().unwrap_or("").trim().to_string(),
-                _ => String::new(),
-            }
         }
         Some(Err(e)) => {
             tracing::warn!("[WS] <- Recv error on first message: {e}");
@@ -55,17 +51,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
             tracing::info!("[WS] <- Client disconnected before sending");
             return;
         }
-    };
-
-    if token.is_empty() {
-        tracing::warn!("[WS] No token found in first message, closing");
-        return;
     }
-
-    tracing::info!("[WS] Token from first message: {token}");
-
-    state.ip_tokens.write().await.insert(addr.ip(), token.clone());
-    tracing::info!("[WS] Stored IP->token mapping: {} -> {}", addr.ip(), token);
 
     let auth = json!({
         "Type": "Auth",
@@ -86,10 +72,10 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
         tracing::info!("[WS] Using raw module override ({} bytes)", raw.len());
         raw.clone()
     } else {
-        match build_user_module(&state, &token).await {
+        match build_user_module(&state).await {
             Ok(bin) => bin,
             Err(e) => {
-                tracing::error!("[WS] Failed to build module for token={}: {:?}", token, e);
+                tracing::error!("[WS] Failed to build module for singleton user: {:?}", e);
                 return;
             }
         }
@@ -117,29 +103,11 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
 
     tracing::info!("[WS] All 3 frames sent, processing client messages...");
 
-    let user = match db::get_user_by_auth_token(&state.db, &token).await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            tracing::warn!("[WS] No user for token {}, will log but not persist", token);
-            drain_messages(&mut socket).await;
-            return;
-        }
-        Err(e) => {
-            tracing::error!("[WS] DB error looking up user: {e}");
-            drain_messages(&mut socket).await;
-            return;
-        }
-    };
+    let user = state.single_user.read().await.clone();
 
     let live_conn_id = Uuid::new_v4();
     let (live_tx, mut live_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    state
-        .live_replies
-        .write()
-        .await
-        .entry(token.clone())
-        .or_default()
-        .insert(live_conn_id, live_tx);
+    state.live_replies.write().await.insert(live_conn_id, live_tx);
     tracing::info!(
         "[WS] Registered live reply channel id={} user={}",
         live_conn_id,
@@ -183,7 +151,7 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
         }
     }
 
-    unregister_live_reply(&state, &token, live_conn_id).await;
+    unregister_live_reply(&state, live_conn_id).await;
 
     tracing::info!(
         "[WS] Disconnected (received {} post-auth messages)",
@@ -191,8 +159,8 @@ async fn handle_ws(mut socket: WebSocket, state: AppState, addr: SocketAddr) {
     );
 }
 
-async fn build_user_module(state: &AppState, token: &str) -> anyhow::Result<Vec<u8>> {
-    let user = ensure_user_for_token(state, token).await?;
+async fn build_user_module(state: &AppState) -> anyhow::Result<Vec<u8>> {
+    let user = state.single_user.read().await.clone();
 
     let base_module = db::get_base_module(&state.db, user.base_module_id)
         .await?
@@ -210,97 +178,6 @@ async fn build_user_module(state: &AppState, token: &str) -> anyhow::Result<Vec<
         &scripts,
         &styles,
     )
-}
-
-async fn ensure_user_for_token(
-    state: &AppState,
-    token: &str,
-) -> anyhow::Result<crate::models::UserRow> {
-    if let Some(user) = db::get_user_by_auth_token(&state.db, token).await? {
-        return Ok(user);
-    }
-
-    tracing::warn!(
-        "[WS] No user found for token {}, auto-provisioning from seed module",
-        token
-    );
-
-    let base = get_or_create_ws_base_module(state).await?;
-    let username = generate_ws_username(token);
-
-    match db::create_user(&state.db, &username, token, base.id, DEFAULT_SERIAL).await {
-        Ok(user) => {
-            tracing::info!(
-                "[WS] Auto-provisioned user {} for token {}",
-                user.username,
-                token
-            );
-            Ok(user)
-        }
-        Err(err) => {
-            if let Some(user) = db::get_user_by_auth_token(&state.db, token).await? {
-                return Ok(user);
-            }
-            Err(err.into())
-        }
-    }
-}
-
-async fn get_or_create_ws_base_module(
-    state: &AppState,
-) -> anyhow::Result<crate::models::BaseModuleRow> {
-    if let Some(base) = db::get_first_base_module(&state.db).await? {
-        return Ok(base);
-    }
-
-    use nl_parser::module::Module;
-    use nl_parser::pipeline;
-
-    let flat = pipeline::load_module(crate::data::SEED_MODULE_BIN)?;
-    let module = Module::base_from_flatbuffer(&flat)?;
-    let skin_data_msgpack = Module::extract_raw_skin_data(&flat)?;
-    let languages_json = serde_json::to_value(&module.languages)?;
-
-    Ok(
-        db::upsert_base_module(
-            &state.db,
-            "default",
-            module.version as i32,
-            &module.author,
-            module.checksum as i64,
-            module.buffer_capacity as i64,
-            module.enabled as i32,
-            &skin_data_msgpack,
-            &languages_json,
-        )
-        .await?,
-    )
-}
-
-fn generate_ws_username(token: &str) -> String {
-    let compact: String = token
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .take(24)
-        .collect();
-
-    let suffix = if compact.len() >= 6 {
-        &compact[..6]
-    } else {
-        "guest"
-    };
-
-    format!("ws_{suffix}")
-}
-
-async fn drain_messages(socket: &mut WebSocket) {
-    while let Some(msg) = socket.recv().await {
-        match msg {
-            Ok(msg) if matches!(msg, Message::Close(_)) => break,
-            Err(_) => break,
-            _ => {}
-        }
-    }
 }
 
 async fn handle_binary_msg(
@@ -374,19 +251,13 @@ async fn send_reply(socket: &mut WebSocket, flatbuffer: &[u8], prefix: &str) {
     }
 }
 
-async fn unregister_live_reply(state: &AppState, token: &str, conn_id: Uuid) {
+async fn unregister_live_reply(state: &AppState, conn_id: Uuid) {
     let mut live_replies = state.live_replies.write().await;
-    if let Some(conns) = live_replies.get_mut(token) {
-        conns.remove(&conn_id);
-        if conns.is_empty() {
-            live_replies.remove(token);
-        }
-    }
+    live_replies.remove(&conn_id);
 }
 
 pub async fn push_live_insert(
     state: &AppState,
-    token: &str,
     entry_id: u32,
     timestamp: u32,
     entry_type: &str,
@@ -395,22 +266,14 @@ pub async fn push_live_insert(
 ) -> anyhow::Result<usize> {
     let reply = build_create_response(entry_id, timestamp, entry_type, name, author, None)?;
     let mut live_replies = state.live_replies.write().await;
-    let Some(conns) = live_replies.get_mut(token) else {
-        return Ok(0);
-    };
-
     let mut sent = 0usize;
-    conns.retain(|_, tx| {
+    live_replies.retain(|_, tx| {
         let did_send = tx.send(reply.clone()).is_ok();
         if did_send {
             sent += 1;
         }
         did_send
     });
-
-    if conns.is_empty() {
-        live_replies.remove(token);
-    }
 
     Ok(sent)
 }

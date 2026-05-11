@@ -73,18 +73,15 @@ h1 { margin: 0; font-size: clamp(22px, 4vw, 34px); line-height: 1.05; font-weigh
 .label { color: var(--faint); text-transform: uppercase; font-size: 11px; font-weight: 700; margin-bottom: 14px; }
 .row { display: flex; gap: 10px; align-items: center; }
 .stack { display: grid; gap: 10px; }
-input[type="text"], input[type="password"] {
+input[type="text"] {
   width: 100%; border: 1px solid var(--line); border-radius: 8px; outline: none;
   background: var(--panel-soft); color: var(--text); padding: 11px 12px;
 }
 input:focus { border-color: var(--line-strong); background: var(--panel); }
 input::placeholder { color: var(--faint); }
-.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; background: var(--panel-soft); border-radius: 8px; }
-.tab, .btn, .pill, .link-btn {
+.btn, .pill, .link-btn {
   border-radius: 8px; border: 1px solid transparent; cursor: pointer; transition: opacity .16s ease, border-color .16s ease, background .16s ease;
 }
-.tab { background: transparent; color: var(--muted); padding: 8px; }
-.tab.on { background: var(--panel); color: var(--text); border-color: var(--line); }
 .btn { width: 100%; background: var(--accent); color: var(--accent-text); padding: 11px 12px; font-weight: 700; }
 .btn:hover, .pill:hover, .link-btn:hover { opacity: .84; }
 .btn:disabled, .pill:disabled, .link-btn:disabled { opacity: .45; cursor: default; }
@@ -130,34 +127,20 @@ input[type="file"] { display: none; }
       <img src="https://i.pinimg.com/736x/a5/24/84/a5248413f4f185f67e4dc5db292264bd.jpg" alt="bober">
       <div>
         <h1>who are you?</h1>
-        <div class="subtle">sign in, share the good stuff, keep the app fed</div>
+        <div class="subtle">single-user control panel for nl-reloaded</div>
       </div>
     </div>
     <button class="theme-btn" id="themeBtn" title="toggle theme" aria-label="toggle theme"></button>
   </header>
 
   <section class="grid">
-    <div class="card span-5">
-      <div class="label">account</div>
-      <div class="stack">
-        <input type="text" id="username" placeholder="username" autocomplete="username">
-        <input type="password" id="password" placeholder="password" autocomplete="current-password">
-        <div class="tabs">
-          <button class="tab on" id="tabSignup">sign up</button>
-          <button class="tab" id="tabLogin">log in</button>
-        </div>
-        <button class="btn" id="submitBtn">create account</button>
-        <div class="log" id="output">ready</div>
-      </div>
-    </div>
-
-    <div class="card span-7">
+    <div class="card span-12">
       <div class="label">profile</div>
       <div class="avatar-row">
         <img class="avatar" id="avatarPreview" src="/api/getavatar" alt="avatar">
         <div>
-          <div class="name" id="profileName">not logged in</div>
-          <div class="subtle">your token stays in this browser</div>
+          <div class="name" id="profileName">nl-reloaded</div>
+          <div class="subtle">always active, no login required</div>
         </div>
       </div>
       <input type="file" id="avatarFile" accept="image/*">
@@ -170,7 +153,7 @@ input[type="file"] { display: none; }
 
     <div class="card span-6">
       <div class="label">your items</div>
-      <div class="list" id="itemsContainer"><div class="empty">log in to see your items</div></div>
+      <div class="list" id="itemsContainer"><div class="empty">loading items</div></div>
     </div>
 
     <div class="card span-6">
@@ -199,10 +182,6 @@ input[type="file"] { display: none; }
   'use strict';
 
   const $ = id => document.getElementById(id);
-  const output = $('output');
-  const submitBtn = $('submitBtn');
-  const tabSignup = $('tabSignup');
-  const tabLogin = $('tabLogin');
   const themeBtn = $('themeBtn');
   const avatarPreview = $('avatarPreview');
   const avatarFile = $('avatarFile');
@@ -215,8 +194,6 @@ input[type="file"] { display: none; }
   const importCopyBtn = $('importCopyBtn');
   const importToAccountBtn = $('importToAccountBtn');
 
-  let mode = 'signup';
-  let token = localStorage.getItem('nl_token') || '';
   let pendingAvatarBase64 = null;
   let lastImportContent = '';
   let pendingShareCode = '';
@@ -224,7 +201,7 @@ input[type="file"] { display: none; }
     (!localStorage.getItem('nl_theme') && matchMedia('(prefers-color-scheme: dark)').matches);
 
   const setOutput = value => {
-    output.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    console.log(typeof value === 'string' ? value : JSON.stringify(value, null, 2));
   };
 
   const applyTheme = () => {
@@ -237,9 +214,7 @@ input[type="file"] { display: none; }
     localStorage.setItem('nl_theme', dark ? 'dark' : 'light');
   };
 
-  const avatarUrl = () => token
-    ? '/api/getavatar?token=' + encodeURIComponent(token) + '&ts=' + Date.now()
-    : '/api/getavatar?ts=' + Date.now();
+  const avatarUrl = () => '/api/getavatar?ts=' + Date.now();
 
   const copyText = async text => {
     try {
@@ -268,12 +243,6 @@ input[type="file"] { display: none; }
     }
   };
 
-  const syncTabs = () => {
-    submitBtn.textContent = mode === 'signup' ? 'create account' : 'log in';
-    tabSignup.classList.toggle('on', mode === 'signup');
-    tabLogin.classList.toggle('on', mode === 'login');
-  };
-
   const apiJson = async (path, options = {}) => {
     const res = await fetch(path, {
       ...options,
@@ -285,23 +254,14 @@ input[type="file"] { display: none; }
   };
 
   const refreshMe = async () => {
-    if (!token) {
-      profileName.textContent = 'not logged in';
-      avatarPreview.src = '/api/getavatar';
-      loadItems();
-      loadShares();
-      return;
-    }
     try {
-      const data = await apiJson('/api/me?token=' + encodeURIComponent(token));
+      const data = await apiJson('/api/me');
       profileName.textContent = data.username;
       avatarPreview.src = data.avatar_url || avatarUrl();
       loadItems();
       loadShares();
     } catch (e) {
-      localStorage.removeItem('nl_token');
-      token = '';
-      profileName.textContent = 'not logged in';
+      profileName.textContent = 'nl-reloaded';
       avatarPreview.src = '/api/getavatar';
       setOutput(e.data || e.message);
       loadItems();
@@ -311,12 +271,8 @@ input[type="file"] { display: none; }
 
   const loadItems = async () => {
     const el = $('itemsContainer');
-    if (!token) {
-      el.innerHTML = '<div class="empty">log in to see your items</div>';
-      return;
-    }
     try {
-      const data = await apiJson('/api/items?token=' + encodeURIComponent(token));
+      const data = await apiJson('/api/items');
       const all = [
         ...data.scripts.map(item => ({ ...item, type: 'Script' })),
         ...data.configs.map(item => ({ ...item, type: 'Config' })),
@@ -352,12 +308,8 @@ input[type="file"] { display: none; }
 
   const loadShares = async () => {
     const el = $('sharesContainer');
-    if (!token) {
-      el.innerHTML = '<div class="empty">log in to see your shares</div>';
-      return;
-    }
     try {
-      const data = await apiJson('/api/myshares?token=' + encodeURIComponent(token));
+      const data = await apiJson('/api/myshares');
       if (!data.shares.length) {
         el.innerHTML = '<div class="empty">no shares yet</div>';
         return;
@@ -397,7 +349,7 @@ input[type="file"] { display: none; }
     try {
       const data = await apiJson('/api/share', {
         method: 'POST',
-        body: JSON.stringify({ token, item_type: itemType, item_id: itemId }),
+        body: JSON.stringify({ item_type: itemType, item_id: itemId }),
       });
       const link = data.share_url || shareUrl(data.share_code);
       const copied = await copyText(link);
@@ -418,7 +370,7 @@ input[type="file"] { display: none; }
     try {
       await apiJson('/api/unshare', {
         method: 'POST',
-        body: JSON.stringify({ token, share_code: shareCode }),
+        body: JSON.stringify({ share_code: shareCode }),
       });
       setOutput('share revoked');
       loadShares();
@@ -429,35 +381,6 @@ input[type="file"] { display: none; }
       btn.disabled = false;
     }
   };
-
-  submitBtn.addEventListener('click', async () => {
-    const username = $('username').value.trim();
-    const password = $('password').value;
-    if (!username || !password) {
-      setOutput('username and password required');
-      return;
-    }
-    submitBtn.disabled = true;
-    const old = submitBtn.textContent;
-    submitBtn.textContent = 'working';
-    try {
-      const data = await apiJson('/api/' + mode, {
-        method: 'POST',
-        body: JSON.stringify({ username, password }),
-      });
-      token = data.token;
-      localStorage.setItem('nl_token', token);
-      $('password').value = '';
-      setOutput(data);
-      refreshMe();
-      autoImportPendingShare();
-    } catch (e) {
-      setOutput(e.data || e.message);
-    } finally {
-      submitBtn.textContent = old;
-      submitBtn.disabled = false;
-    }
-  });
 
   importBtn.addEventListener('click', async () => {
     const code = normalizeShareCode(importCodeEl.value);
@@ -486,10 +409,6 @@ input[type="file"] { display: none; }
   });
 
   const importToAccount = async code => {
-    if (!token) {
-      setOutput('log in first');
-      return false;
-    }
     const shareCode = normalizeShareCode(code);
     if (!shareCode) {
       setOutput('paste a share code first');
@@ -499,7 +418,7 @@ input[type="file"] { display: none; }
     try {
       await apiJson('/api/import_to_account', {
         method: 'POST',
-        body: JSON.stringify({ token, share_code: shareCode }),
+        body: JSON.stringify({ share_code: shareCode }),
       });
       setOutput('added to your list');
       loadItems();
@@ -515,10 +434,6 @@ input[type="file"] { display: none; }
   const autoImportPendingShare = async () => {
     if (!pendingShareCode) return;
     importCodeEl.value = pendingShareCode;
-    if (!token) {
-      setOutput('log in to add this shared item');
-      return;
-    }
     const added = await importToAccount(pendingShareCode);
     if (added) {
       pendingShareCode = '';
@@ -578,15 +493,14 @@ input[type="file"] { display: none; }
   });
 
   $('saveAvatar').addEventListener('click', async () => {
-    if (!token) return setOutput('log in first');
     if (!pendingAvatarBase64) return setOutput('choose a photo first');
     try {
       const data = await apiJson('/api/avatar', {
         method: 'POST',
-        body: JSON.stringify({ token, image_base64: pendingAvatarBase64 }),
+        body: JSON.stringify({ image_base64: pendingAvatarBase64 }),
       });
       pendingAvatarBase64 = null;
-      avatarPreview.src = data.avatar_url + '&saved=1';
+      avatarPreview.src = avatarUrl();
       setOutput(data);
     } catch (e) {
       setOutput(e.data || e.message);
@@ -594,11 +508,10 @@ input[type="file"] { display: none; }
   });
 
   $('clearAvatar').addEventListener('click', async () => {
-    if (!token) return setOutput('log in first');
     try {
       const data = await apiJson('/api/avatar', {
         method: 'POST',
-        body: JSON.stringify({ token, image_base64: '' }),
+        body: JSON.stringify({ image_base64: '' }),
       });
       pendingAvatarBase64 = null;
       avatarFile.value = '';
@@ -609,15 +522,12 @@ input[type="file"] { display: none; }
     }
   });
 
-  tabSignup.addEventListener('click', () => { mode = 'signup'; syncTabs(); });
-  tabLogin.addEventListener('click', () => { mode = 'login'; syncTabs(); });
   themeBtn.addEventListener('click', () => { dark = !dark; applyTheme(); });
   importCodeEl.addEventListener('keydown', e => { if (e.key === 'Enter') importBtn.click(); });
 
   applyTheme();
   pendingShareCode = normalizeShareCode(shareCodeFromLocation());
   if (pendingShareCode) importCodeEl.value = pendingShareCode;
-  syncTabs();
   refreshMe();
   autoImportPendingShare();
 })();

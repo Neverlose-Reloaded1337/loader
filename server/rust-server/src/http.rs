@@ -1,23 +1,17 @@
 use std::{
     env,
-    net::SocketAddr,
     path::Path,
 };
 
-use argon2::{
-    Argon2, PasswordHasher, PasswordVerifier,
-    password_hash::{PasswordHash, SaltString},
-};
 use axum::{
     Router,
     body::Body,
-    extract::{ConnectInfo, Path as AxumPath, Query, Request, State},
+    extract::{Path as AxumPath, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use rand_core::OsRng;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -26,10 +20,9 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
-use crate::config::{self, DEFAULT_SERIAL};
-use crate::data::{DEFAULT_AVATAR_PNG, SEED_MODULE_BIN};
+use crate::config;
+use crate::data::DEFAULT_AVATAR_PNG;
 use crate::error::AppError;
-use crate::models::UserRow;
 use crate::{AppState, db, ws};
 
 pub fn router(state: AppState) -> Router {
@@ -50,8 +43,6 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/", get(index_handler))
-        .route("/api/signup", post(signup_handler))
-        .route("/api/login", post(login_handler))
         .route("/api/me", get(me_handler))
         .route("/api/avatar", post(update_avatar_handler))
         .route("/api/config", get(config_handler))
@@ -67,20 +58,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/unshare", post(unshare_handler))
         .route("/api/shared/{code}", get(shared_handler))
         .route("/api/import_to_account", post(import_to_account_handler))
-        // Admin endpoints
-        .route("/admin/seed", post(admin_seed))
-        .route(
-            "/admin/users",
-            post(admin_create_user).get(admin_list_users),
-        )
-        .route(
-            "/admin/users/{id}/logs",
-            get(admin_get_logs).post(admin_create_log),
-        )
-        .route(
-            "/admin/users/{user_id}/logs/{log_id}",
-            axum::routing::put(admin_update_log).delete(admin_delete_log),
-        )
         .fallback(fallback_handler)
         .layer(middleware)
         .with_state(state)
@@ -107,122 +84,16 @@ async fn config_handler(Query(params): Query<HashMap<String, String>>) -> impl I
     axum::Json(resp)
 }
 
-async fn signup_handler(
-    State(state): State<AppState>,
-    axum::Json(req): axum::Json<AuthReq>,
-) -> Result<Response, AppError> {
-    let username = normalize_username(&req.username)?;
-    validate_password(&req.password)?;
-
-    if db::get_user_by_username(&state.db, &username)
-        .await?
-        .is_some()
-    {
-        return Ok(response_json(
-            StatusCode::CONFLICT,
-            json!({"error": "username already exists"}),
-        ));
-    }
-
-    let base = get_or_create_signup_base_module(&state).await?;
-
-    let password_hash = hash_password(&req.password)?;
-    let user = db::create_user_with_password_hash(
-        &state.db,
-        &username,
-        &password_hash,
-        base.id,
-        DEFAULT_SERIAL,
-    )
-    .await?;
-
-    Ok(response_json(
-        StatusCode::CREATED,
-        json!({
-            "status": "ok",
-            "username": user.username,
-            "token": user.auth_token,
-            "avatar_url": format!("/api/getavatar?token={}", user.auth_token),
-        }),
-    ))
-}
-
-async fn get_or_create_signup_base_module(
-    state: &AppState,
-) -> Result<crate::models::BaseModuleRow, AppError> {
-    if let Some(base) = db::get_first_base_module(&state.db).await? {
-        return Ok(base);
-    }
-
-    use nl_parser::module::Module;
-    use nl_parser::pipeline;
-
-    let flat = pipeline::load_module(SEED_MODULE_BIN)?;
-    let module = Module::base_from_flatbuffer(&flat)?;
-    let skin_data_msgpack = Module::extract_raw_skin_data(&flat)?;
-    let languages_json = serde_json::to_value(&module.languages)?;
-
-    db::upsert_base_module(
-        &state.db,
-        "default",
-        module.version as i32,
-        &module.author,
-        module.checksum as i64,
-        module.buffer_capacity as i64,
-        module.enabled as i32,
-        &skin_data_msgpack,
-        &languages_json,
-    )
-    .await
-    .map_err(AppError)
-}
-
-async fn login_handler(
-    State(state): State<AppState>,
-    axum::Json(req): axum::Json<AuthReq>,
-) -> Result<Response, AppError> {
-    let username = normalize_username(&req.username)?;
-    let Some(user) = db::get_user_by_username(&state.db, &username).await? else {
-        return Ok(invalid_credentials());
-    };
-
-    let Some(password_hash) = user.password_hash.as_deref() else {
-        return Ok(invalid_credentials());
-    };
-
-    if !verify_password(password_hash, &req.password)? {
-        return Ok(invalid_credentials());
-    }
+async fn me_handler(State(state): State<AppState>) -> Result<Response, AppError> {
+    let user = current_user(&state).await;
 
     Ok(response_json(
         StatusCode::OK,
         json!({
             "status": "ok",
             "username": user.username,
-            "token": user.auth_token,
             "has_avatar": user.avatar_png.is_some(),
-            "avatar_url": format!("/api/getavatar?token={}", user.auth_token),
-        }),
-    ))
-}
-
-async fn me_handler(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Response, AppError> {
-    let user = match require_query_user(&state, &params).await? {
-        Ok(user) => user,
-        Err(response) => return Ok(response),
-    };
-
-    Ok(response_json(
-        StatusCode::OK,
-        json!({
-            "status": "ok",
-            "username": user.username,
-            "token": user.auth_token,
-            "has_avatar": user.avatar_png.is_some(),
-            "avatar_url": format!("/api/getavatar?token={}", user.auth_token),
+            "avatar_url": "/api/getavatar",
         }),
     ))
 }
@@ -231,65 +102,37 @@ async fn update_avatar_handler(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<AvatarReq>,
 ) -> Result<Response, AppError> {
-    let token = req.token.trim();
-    let user = match require_user_by_token(&state, token).await? {
-        Ok(user) => user,
-        Err(response) => return Ok(response),
-    };
+    let user = current_user(&state).await;
 
     let avatar_png = match req.image_base64.as_deref().map(str::trim) {
         Some("") | None => None,
         Some(image_base64) => Some(decode_avatar_png(image_base64)?),
     };
 
-    db::update_user_avatar(&state.db, user.id, avatar_png.as_deref()).await?;
+    let updated_user = db::update_user_avatar(&state.db, user.id, avatar_png.as_deref())
+        .await?
+        .ok_or_else(|| AppError(anyhow::anyhow!("singleton user not found")))?;
+    replace_current_user(&state, updated_user).await;
 
     Ok(response_json(
         StatusCode::OK,
         json!({
             "status": "ok",
             "has_avatar": avatar_png.is_some(),
-            "avatar_url": format!("/api/getavatar?token={}", user.auth_token),
+            "avatar_url": "/api/getavatar",
         }),
     ))
 }
 
 async fn avatar_handler(
     State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let size = params.get("size").cloned().unwrap_or_default();
-    let requested_token = extract_token(&params);
-    tracing::info!(
-        "[HTTP] GET /api/getavatar size={} token={:?} from={}",
-        size,
-        requested_token,
-        addr
-    );
-
-    if let Some(ref token) = requested_token {
-        if let Ok(Some(user)) = db::get_user_by_auth_token(&state.db, token).await {
-            if let Some(avatar) = user.avatar_png {
-                return avatar_response(avatar);
-            }
-            return default_avatar();
-        }
-    }
-
-    let fallback_token = state.ip_tokens.read().await.get(&addr.ip()).cloned();
-    let fallback_user = match fallback_token {
-        Some(token) => db::get_user_by_auth_token(&state.db, &token)
-            .await
-            .ok()
-            .flatten(),
-        None => None,
-    };
-
-    if let Some(user) = fallback_user {
-        if let Some(avatar) = user.avatar_png {
-            return avatar_response(avatar);
-        }
+    tracing::info!("[HTTP] GET /api/getavatar size={}", size);
+    let user = current_user(&state).await;
+    if let Some(avatar) = user.avatar_png {
+        return avatar_response(avatar);
     }
 
     default_avatar()
@@ -304,24 +147,17 @@ async fn sendlog_handler(Query(params): Query<HashMap<String, String>>) -> impl 
 async fn lua_handler(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,
-    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    tracing::info!("[HTTP] GET /lua/{} params={:?}", name, params);
-    let body = if let Some(token) = extract_token(&params) {
-        match db::get_user_by_auth_token(&state.db, &token).await {
-            Ok(Some(user)) => db::get_user_script_by_name(&state.db, user.id, &name)
-                .await
-                .ok()
-                .flatten()
-                .map(|script| script.content)
-                .filter(|content| !content.is_empty())
-                .unwrap_or_else(|| format!("-- lua library: {name}\n"))
-                .into_bytes(),
-            _ => "-- invalid token\n".as_bytes().to_vec(),
-        }
-    } else {
-        format!("-- lua library: {name}\n").into_bytes()
-    };
+    tracing::info!("[HTTP] GET /lua/{}", name);
+    let user = current_user(&state).await;
+    let body = db::get_user_script_by_name(&state.db, user.id, &name)
+        .await
+        .ok()
+        .flatten()
+        .map(|script| script.content)
+        .filter(|content| !content.is_empty())
+        .unwrap_or_else(|| format!("-- lua library: {name}\n"))
+        .into_bytes();
     tracing::debug!("[HTTP] -> lua response ({} bytes)", body.len());
     Response::builder()
         .status(StatusCode::OK)
@@ -513,14 +349,8 @@ fn empty_ok() -> Response {
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-async fn items_handler(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Response, AppError> {
-    let user = match require_query_user(&state, &params).await? {
-        Ok(user) => user,
-        Err(response) => return Ok(response),
-    };
+async fn items_handler(State(state): State<AppState>) -> Result<Response, AppError> {
+    let user = current_user(&state).await;
 
     let scripts = db::get_user_scripts(&state.db, user.id).await?;
     let configs = db::get_user_configs(&state.db, user.id).await?;
@@ -542,11 +372,7 @@ async fn share_handler(
     headers: HeaderMap,
     axum::Json(req): axum::Json<ShareReq>,
 ) -> Result<Response, AppError> {
-    let token = req.token.trim();
-    let user = match require_user_by_token(&state, token).await? {
-        Ok(user) => user,
-        Err(response) => return Ok(response),
-    };
+    let user = current_user(&state).await;
 
     let item_id =
         Uuid::parse_str(&req.item_id).map_err(|_| AppError(anyhow::anyhow!("invalid item_id")))?;
@@ -606,14 +432,8 @@ async fn share_handler(
     ))
 }
 
-async fn myshares_handler(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Result<Response, AppError> {
-    let user = match require_query_user(&state, &params).await? {
-        Ok(user) => user,
-        Err(response) => return Ok(response),
-    };
+async fn myshares_handler(State(state): State<AppState>) -> Result<Response, AppError> {
+    let user = current_user(&state).await;
     let shares = db::list_user_share_codes(&state.db, user.id).await?;
     Ok(response_json(
         StatusCode::OK,
@@ -625,11 +445,7 @@ async fn unshare_handler(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<UnshareReq>,
 ) -> Result<Response, AppError> {
-    let token = req.token.trim();
-    let user = match require_user_by_token(&state, token).await? {
-        Ok(user) => user,
-        Err(response) => return Ok(response),
-    };
+    let user = current_user(&state).await;
 
     let Some(share) = db::get_share_code(&state.db, &req.share_code).await? else {
         return Ok(response_json(
@@ -704,20 +520,13 @@ async fn import_to_account_handler(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<ImportToAccountReq>,
 ) -> Result<Response, AppError> {
-    let token = req.token.trim();
-    let user = match require_user_by_token(&state, token).await? {
-        Ok(user) => user,
-        Err(response) => return Ok(response),
-    };
+    let user = current_user(&state).await;
 
     let (share, script, style, config) = db::get_shared_item(&state.db, &req.share_code)
         .await?
         .ok_or_else(|| AppError(anyhow::anyhow!("share code not found")))?;
 
-    let author_name = db::get_user_by_id(&state.db, share.user_id)
-        .await?
-        .map(|u| u.username)
-        .unwrap_or_else(|| "Unknown".to_string());
+    let author_name = current_user(&state).await.username;
     let new_entry_id = db::next_entry_id(&state.db, user.id).await?;
     let now_ts = chrono::Utc::now().timestamp() as i32;
 
@@ -767,7 +576,6 @@ async fn import_to_account_handler(
     let live_insert_sent = if matches!(share.item_type.as_str(), "Script" | "Config" | "Style") {
         let sent = ws::push_live_insert(
             &state,
-            token,
             new_entry_id as u32,
             now_ts as u32,
             &share.item_type,
@@ -814,7 +622,7 @@ async fn fallback_handler(State(state): State<AppState>, req: Request) -> Respon
         headers
     );
 
-    // Check for POST with type:4 auth body → per-user serial
+    // Some clients ask for the current serial with a type=4 POST payload.
     if method == axum::http::Method::POST {
         let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 1024).await {
             Ok(b) => b,
@@ -828,15 +636,7 @@ async fn fallback_handler(State(state): State<AppState>, req: Request) -> Respon
         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
             tracing::info!("[HTTP] POST JSON ({} bytes): {}", body_bytes.len(), val);
             if val.get("type").and_then(|t| t.as_i64()) == Some(4) {
-                let token = val.get("token").and_then(|t| t.as_str()).unwrap_or("");
-                let serial = if !token.is_empty() {
-                    match db::get_user_by_auth_token(&state.db, token).await {
-                        Ok(Some(user)) => user.serial,
-                        _ => String::new(),
-                    }
-                } else {
-                    String::new()
-                };
+                let serial = current_user(&state).await.serial;
 
                 tracing::info!(
                     "[HTTP] -> GetSerial (type=4), returning serial ({} bytes)",
@@ -906,84 +706,25 @@ fn response_json(status: StatusCode, value: serde_json::Value) -> Response {
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-fn invalid_credentials() -> Response {
-    response_json(
-        StatusCode::UNAUTHORIZED,
-        json!({"error": "invalid credentials"}),
-    )
-}
-
-async fn require_query_user(
-    state: &AppState,
-    params: &HashMap<String, String>,
-) -> Result<Result<UserRow, Response>, AppError> {
-    let Some(token) = extract_token(params) else {
-        return Ok(Err(missing_token_response()));
-    };
-
-    require_user_by_token(state, &token).await
-}
-
-async fn require_user_by_token(
-    state: &AppState,
-    token: &str,
-) -> Result<Result<UserRow, Response>, AppError> {
-    if token.trim().is_empty() {
-        return Ok(Err(missing_token_response()));
-    }
-
-    match db::get_user_by_auth_token(&state.db, token.trim()).await? {
-        Some(user) => Ok(Ok(user)),
-        None => Ok(Err(invalid_token_response())),
-    }
-}
-
-fn missing_token_response() -> Response {
-    response_json(StatusCode::UNAUTHORIZED, json!({"error": "missing token"}))
-}
-
-fn invalid_token_response() -> Response {
-    response_json(StatusCode::UNAUTHORIZED, json!({"error": "invalid token"}))
-}
-
-#[derive(Deserialize)]
-struct AuthReq {
-    username: String,
-    password: String,
-}
-
 #[derive(Deserialize)]
 struct AvatarReq {
-    token: String,
     image_base64: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ShareReq {
-    token: String,
     item_type: String,
     item_id: String,
 }
 
 #[derive(Deserialize)]
 struct UnshareReq {
-    token: String,
     share_code: String,
 }
 
 #[derive(Deserialize)]
 struct ImportToAccountReq {
-    token: String,
     share_code: String,
-}
-
-fn extract_token(params: &HashMap<String, String>) -> Option<String> {
-    params
-        .get("token")
-        .cloned()
-        .or_else(|| params.get("auth_token").cloned())
-        .map(|token| token.trim().to_string())
-        .filter(|token| !token.is_empty())
 }
 
 pub(crate) fn share_url_from_headers(headers: &HeaderMap, share_code: &str) -> String {
@@ -1046,47 +787,12 @@ fn url_encode_component(value: &str) -> String {
         .collect()
 }
 
-fn normalize_username(username: &str) -> Result<String, AppError> {
-    let username = username.trim();
-    if username.len() < 3 || username.len() > 32 {
-        return Err(AppError(anyhow::anyhow!(
-            "username must be between 3 and 32 characters"
-        )));
-    }
-    if !username
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-    {
-        return Err(AppError(anyhow::anyhow!(
-            "username can only contain letters, numbers, '_' or '-'"
-        )));
-    }
-    Ok(username.to_string())
+async fn current_user(state: &AppState) -> crate::models::UserRow {
+    state.single_user.read().await.clone()
 }
 
-fn validate_password(password: &str) -> Result<(), AppError> {
-    if password.len() < 8 {
-        return Err(AppError(anyhow::anyhow!(
-            "password must be at least 8 characters"
-        )));
-    }
-    Ok(())
-}
-
-fn hash_password(password: &str) -> Result<String, AppError> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|e| AppError(anyhow::anyhow!("failed to hash password: {e}")))
-}
-
-fn verify_password(password_hash: &str, password: &str) -> Result<bool, AppError> {
-    let parsed_hash = PasswordHash::new(password_hash)
-        .map_err(|_| AppError(anyhow::anyhow!("invalid stored password hash")))?;
-    Ok(Argon2::default()
-        .verify_password(password.as_bytes(), &parsed_hash)
-        .is_ok())
+async fn replace_current_user(state: &AppState, user: crate::models::UserRow) {
+    *state.single_user.write().await = user;
 }
 
 fn decode_avatar_png(image_base64: &str) -> Result<Vec<u8>, AppError> {
@@ -1190,167 +896,5 @@ fn try_decrypt_and_log(prefix: &str, data: &[u8]) {
         Err(_) => {
             tracing::debug!("{} not AES-encrypted (decrypt failed)", prefix);
         }
-    }
-}
-
-// ── Admin endpoints ──
-
-async fn admin_seed(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
-    use nl_parser::module::Module;
-    use nl_parser::pipeline;
-
-    tracing::info!("[HTTP] POST /admin/seed — parsing SEED_MODULE_BIN");
-
-    let flat = pipeline::load_module(SEED_MODULE_BIN)?;
-    let module = Module::base_from_flatbuffer(&flat)?;
-
-    // Extract raw skin_data bytes directly from FlatBuffer (no struct round-trip)
-    let skin_data_msgpack = Module::extract_raw_skin_data(&flat)?;
-    let languages_json = serde_json::to_value(&module.languages)?;
-
-    let base = db::insert_base_module(
-        &state.db,
-        "default",
-        module.version as i32,
-        &module.author,
-        module.checksum as i64,
-        module.buffer_capacity as i64,
-        module.enabled as i32,
-        &skin_data_msgpack,
-        &languages_json,
-    )
-    .await?;
-
-    // Create default user from the module's author + hardcoded default token
-    let user = db::create_user(
-        &state.db,
-        &module.author,
-        config::DEFAULT_USER_TOKEN,
-        base.id,
-        DEFAULT_SERIAL,
-    )
-    .await?;
-
-    tracing::info!(
-        "[HTTP] -> Seed complete, base_module id={}, user id={} ({})",
-        base.id,
-        user.id,
-        user.username
-    );
-    Ok(axum::Json(json!({
-        "status": "ok",
-        "base_module_id": base.id,
-        "user_id": user.id,
-        "username": user.username,
-        "auth_token": user.auth_token,
-        "version": base.version,
-    })))
-}
-
-#[derive(Deserialize)]
-struct CreateUserReq {
-    username: String,
-    auth_token: String,
-    base_module_id: Uuid,
-    #[serde(default)]
-    serial: String,
-}
-
-async fn admin_create_user(
-    State(state): State<AppState>,
-    axum::Json(req): axum::Json<CreateUserReq>,
-) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("[HTTP] POST /admin/users username={}", req.username);
-    let user = db::create_user(
-        &state.db,
-        &req.username,
-        &req.auth_token,
-        req.base_module_id,
-        &req.serial,
-    )
-    .await?;
-    Ok((StatusCode::CREATED, axum::Json(json!(user))))
-}
-
-async fn admin_list_users(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("[HTTP] GET /admin/users");
-    let users = db::list_users(&state.db).await?;
-    Ok(axum::Json(json!(users)))
-}
-
-async fn admin_get_logs(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("[HTTP] GET /admin/users/{}/logs", id);
-    let logs = db::get_user_log_entries(&state.db, id).await?;
-    Ok(axum::Json(json!(logs)))
-}
-
-#[derive(Deserialize)]
-struct CreateLogReq {
-    entry_id: i32,
-    timestamp: i32,
-    entry_type: String,
-    author: String,
-}
-
-async fn admin_create_log(
-    State(state): State<AppState>,
-    AxumPath(user_id): AxumPath<Uuid>,
-    axum::Json(req): axum::Json<CreateLogReq>,
-) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("[HTTP] POST /admin/users/{}/logs", user_id);
-    let entry = db::create_log_entry(
-        &state.db,
-        user_id,
-        req.entry_id,
-        req.timestamp,
-        &req.entry_type,
-        &req.author,
-    )
-    .await?;
-    Ok((StatusCode::CREATED, axum::Json(json!(entry))))
-}
-
-#[derive(Deserialize)]
-struct UpdateLogReq {
-    entry_id: i32,
-    timestamp: i32,
-    entry_type: String,
-    author: String,
-}
-
-async fn admin_update_log(
-    State(state): State<AppState>,
-    AxumPath((user_id, log_id)): AxumPath<(Uuid, Uuid)>,
-    axum::Json(req): axum::Json<UpdateLogReq>,
-) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("[HTTP] PUT /admin/users/{}/logs/{}", user_id, log_id);
-    let entry = db::update_log_entry(
-        &state.db,
-        log_id,
-        req.entry_id,
-        req.timestamp,
-        &req.entry_type,
-        &req.author,
-    )
-    .await?;
-    match entry {
-        Some(e) => Ok(axum::Json(json!(e)).into_response()),
-        None => Ok(StatusCode::NOT_FOUND.into_response()),
-    }
-}
-
-async fn admin_delete_log(
-    State(state): State<AppState>,
-    AxumPath((user_id, log_id)): AxumPath<(Uuid, Uuid)>,
-) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("[HTTP] DELETE /admin/users/{}/logs/{}", user_id, log_id);
-    let deleted = db::delete_log_entry(&state.db, log_id).await?;
-    if deleted {
-        Ok(axum::Json(json!({"status": "deleted"})).into_response())
-    } else {
-        Ok(StatusCode::NOT_FOUND.into_response())
     }
 }

@@ -11,19 +11,23 @@ mod ws;
 
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, mpsc};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+use crate::config::{DEFAULT_SERIAL, DEFAULT_USER_TOKEN, SINGLE_USER_NAME};
+use crate::data::SEED_MODULE_BIN;
+use crate::models::UserRow;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
     pub raw_module: Option<Vec<u8>>,
-    pub ip_tokens: Arc<RwLock<HashMap<IpAddr, String>>>,
-    pub live_replies: Arc<RwLock<HashMap<String, HashMap<Uuid, mpsc::UnboundedSender<Vec<u8>>>>>>,
+    pub single_user: Arc<RwLock<UserRow>>,
+    pub live_replies: Arc<RwLock<HashMap<Uuid, mpsc::UnboundedSender<Vec<u8>>>>>,
 }
 
 #[tokio::main]
@@ -52,10 +56,14 @@ async fn main() {
         .await
         .expect("failed to run database migrations");
 
+    let single_user = ensure_single_user(&db)
+        .await
+        .expect("failed to initialize singleton user");
+
     let state = AppState {
         db,
         raw_module: None,
-        ip_tokens: Arc::new(RwLock::new(HashMap::new())),
+        single_user: Arc::new(RwLock::new(single_user)),
         live_replies: Arc::new(RwLock::new(HashMap::new())),
     };
 
@@ -107,4 +115,41 @@ async fn main() {
             tracing::info!("Shutting down");
         }
     }
+}
+
+async fn ensure_single_user(db: &SqlitePool) -> anyhow::Result<UserRow> {
+    if let Some(user) = db::get_user_by_username(db, SINGLE_USER_NAME).await? {
+        return Ok(user);
+    }
+
+    use nl_parser::module::Module;
+    use nl_parser::pipeline;
+
+    let flat = pipeline::load_module(SEED_MODULE_BIN)?;
+    let module = Module::base_from_flatbuffer(&flat)?;
+    let skin_data_msgpack = Module::extract_raw_skin_data(&flat)?;
+    let languages_json = serde_json::to_value(&module.languages)?;
+
+    let base_module = db::upsert_base_module(
+        db,
+        "default",
+        module.version as i32,
+        &module.author,
+        module.checksum as i64,
+        module.buffer_capacity as i64,
+        module.enabled as i32,
+        &skin_data_msgpack,
+        &languages_json,
+    )
+    .await?;
+
+    db::create_user(
+        db,
+        SINGLE_USER_NAME,
+        DEFAULT_USER_TOKEN,
+        base_module.id,
+        DEFAULT_SERIAL,
+    )
+    .await
+    .map_err(Into::into)
 }

@@ -8,25 +8,9 @@ use crate::models::{
 
 const NOW_SQL: &str = "STRFTIME('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
-pub async fn get_user_by_auth_token(pool: &SqlitePool, token: &str) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE auth_token = ?")
-        .bind(token)
-        .fetch_optional(pool)
-        .await?;
-    Ok(user)
-}
-
 pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> Result<Option<UserRow>> {
     let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE username = ?")
         .bind(username)
-        .fetch_optional(pool)
-        .await?;
-    Ok(user)
-}
-
-pub async fn get_user_by_id(pool: &SqlitePool, id: Uuid) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE id = ?")
-        .bind(id)
         .fetch_optional(pool)
         .await?;
     Ok(user)
@@ -50,31 +34,6 @@ pub async fn create_user(
     .bind(auth_token)
     .bind(base_module_id)
     .bind(serial)
-    .fetch_one(pool)
-    .await?;
-    Ok(user)
-}
-
-pub async fn create_user_with_password_hash(
-    pool: &SqlitePool,
-    username: &str,
-    password_hash: &str,
-    base_module_id: Uuid,
-    serial: &str,
-) -> Result<UserRow> {
-    let id = Uuid::new_v4();
-    let auth_token = Uuid::new_v4().to_string();
-    let user = sqlx::query_as::<_, UserRow>(
-        "INSERT INTO users (id, username, auth_token, base_module_id, serial, password_hash)
-         VALUES (?, ?, ?, ?, ?, ?)
-         RETURNING *",
-    )
-    .bind(id)
-    .bind(username)
-    .bind(auth_token)
-    .bind(base_module_id)
-    .bind(serial)
-    .bind(password_hash)
     .fetch_one(pool)
     .await?;
     Ok(user)
@@ -111,60 +70,11 @@ pub async fn update_user_type7_blob(
     Ok(user)
 }
 
-pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>> {
-    let users = sqlx::query_as::<_, UserRow>("SELECT * FROM users ORDER BY created_at")
-        .fetch_all(pool)
-        .await?;
-    Ok(users)
-}
-
 pub async fn get_base_module(pool: &SqlitePool, id: Uuid) -> Result<Option<BaseModuleRow>> {
     let module = sqlx::query_as::<_, BaseModuleRow>("SELECT * FROM base_modules WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
         .await?;
-    Ok(module)
-}
-
-pub async fn get_first_base_module(pool: &SqlitePool) -> Result<Option<BaseModuleRow>> {
-    let module = sqlx::query_as::<_, BaseModuleRow>(
-        "SELECT * FROM base_modules ORDER BY created_at, id LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(module)
-}
-
-pub async fn insert_base_module(
-    pool: &SqlitePool,
-    name: &str,
-    version: i32,
-    author: &str,
-    checksum: i64,
-    buffer_capacity: i64,
-    enabled: i32,
-    skin_data_msgpack: &[u8],
-    languages_json: &serde_json::Value,
-) -> Result<BaseModuleRow> {
-    let id = Uuid::new_v4();
-    let json_text = serde_json::to_string(languages_json)?;
-    let module = sqlx::query_as::<_, BaseModuleRow>(
-        "INSERT INTO base_modules (
-            id, name, version, author, checksum, buffer_capacity, enabled, skin_data_msgpack, languages_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         RETURNING *",
-    )
-    .bind(id)
-    .bind(name)
-    .bind(version)
-    .bind(author)
-    .bind(checksum)
-    .bind(buffer_capacity)
-    .bind(enabled)
-    .bind(skin_data_msgpack)
-    .bind(&json_text)
-    .fetch_one(pool)
-    .await?;
     Ok(module)
 }
 
@@ -259,38 +169,6 @@ pub async fn create_log_entry(
     .fetch_one(pool)
     .await?;
     Ok(entry)
-}
-
-pub async fn update_log_entry(
-    pool: &SqlitePool,
-    id: Uuid,
-    entry_id: i32,
-    timestamp: i32,
-    entry_type: &str,
-    author: &str,
-) -> Result<Option<LogEntryRow>> {
-    let entry = sqlx::query_as::<_, LogEntryRow>(
-        "UPDATE log_entries
-         SET entry_id = ?, timestamp = ?, entry_type = ?, author = ?
-         WHERE id = ?
-         RETURNING *",
-    )
-    .bind(entry_id)
-    .bind(timestamp)
-    .bind(entry_type)
-    .bind(author)
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(entry)
-}
-
-pub async fn delete_log_entry(pool: &SqlitePool, id: Uuid) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM log_entries WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() > 0)
 }
 
 pub async fn delete_log_entry_by_user_entry_id(
