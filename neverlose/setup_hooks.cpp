@@ -182,5 +182,9 @@ void neverlose::setup_hooks()
 
     HookFn((PVOID)0x41C16EA0, hksend, 0, &sndtram);
 
+<<<<<<< HEAD
     set_nl_logo("NL-Reloaded");
+=======
+    set_nl_logo("HRISITOLOSE");
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 }

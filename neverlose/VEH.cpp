@@ -250,7 +250,11 @@ void cpuid_emulator(CONTEXT* ctx)
 };
 
 static const char errfmt[] =
+<<<<<<< HEAD
             "crash :(\n\n"
+=======
+"uwu neverwose has crashed >.<\n\n"
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 "[0x%p] info:\nError code: 0x%X\nAddress: 0x%X (%c 0x%X)\nAttempt to %s data at address: 0x%X"
 "\n\nEAX = 0x%X\nEBX = 0x%X\nECX = 0x%X\n"
 "EDX = 0x%X\nESI = 0x%X\nEDI = 0x%X\nEBP = 0x%X\nESP = 0x%X\nEIP = 0x%X"
@@ -360,4 +364,8 @@ void neverlose::set_veh()
 {
 	AddVectoredExceptionHandler(0, nl_veh);
 	ENTER_LOGGER(logman) << "Added Vectored Exception Handler " << nl_veh << '\n';
+<<<<<<< HEAD
 };
+=======
+};
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2

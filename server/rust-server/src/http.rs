@@ -22,7 +22,11 @@ use uuid::Uuid;
 use crate::config;
 use crate::data::DEFAULT_AVATAR_PNG;
 use crate::error::AppError;
+<<<<<<< HEAD
 use crate::{AppState, db, local_storage, ws};
+=======
+use crate::{AppState, db, ws};
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 
 pub fn router(state: AppState) -> Router {
     let middleware = ServiceBuilder::new()
@@ -532,7 +536,10 @@ async fn import_to_account_handler(
             let content = c.content;
             db::create_config(&state.db, user.id, new_entry_id, &name).await?;
             db::update_config_content(&state.db, user.id, new_entry_id, &content).await?;
+<<<<<<< HEAD
             local_storage::save_config_file(&name, &content);
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
             name
         }
         "Style" => {

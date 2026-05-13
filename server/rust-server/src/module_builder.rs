@@ -5,22 +5,32 @@ use nl_parser::module::{Language, LogEntry, Module, serialize_translations_json}
 use nl_parser::pipeline;
 
 use crate::config;
+<<<<<<< HEAD
 use crate::models::{BaseModuleRow, ConfigRow, LogEntryRow, ScriptRow, StyleRow};
+=======
+use crate::models::{BaseModuleRow, LogEntryRow, ScriptRow, StyleRow};
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 
 pub fn build_module_bin(
     base: &BaseModuleRow,
     username: &str,
     type7_blob: Option<&str>,
     log_entries: &[LogEntryRow],
+<<<<<<< HEAD
     configs: &[ConfigRow],
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
     scripts: &[ScriptRow],
     styles: &[StyleRow],
 ) -> Result<Vec<u8>> {
     let languages: Vec<Language> =
         serde_json::from_str(&base.languages_json).context("deserialize languages from DB")?;
 
+<<<<<<< HEAD
     let config_rows: std::collections::HashMap<i32, &ConfigRow> =
         configs.iter().map(|config| (config.entry_id, config)).collect();
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
     let script_rows: std::collections::HashMap<i32, &ScriptRow> =
         scripts.iter().map(|script| (script.entry_id, script)).collect();
     let style_rows: std::collections::HashMap<i32, &StyleRow> =
@@ -29,12 +39,19 @@ pub fn build_module_bin(
     let mut script_log = Vec::new();
     let mut style_log = Vec::new();
     for entry in log_entries {
+<<<<<<< HEAD
         let config = config_rows.get(&entry.entry_id).copied();
         let script = script_rows.get(&entry.entry_id).copied();
         let style = style_rows.get(&entry.entry_id).copied();
         let name = config
             .map(|config| config.name.as_str())
             .or_else(|| script.map(|script| script.name.as_str()))
+=======
+        let script = script_rows.get(&entry.entry_id).copied();
+        let style = style_rows.get(&entry.entry_id).copied();
+        let name = script
+            .map(|script| script.name.as_str())
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
             .or_else(|| style.map(|style| style.name.as_str()))
             .unwrap_or_else(|| entry.entry_type.as_str());
         let log_entry = LogEntry {

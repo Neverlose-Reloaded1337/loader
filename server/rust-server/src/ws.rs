@@ -16,7 +16,11 @@ use uuid::Uuid;
 
 use crate::config::{AUTH_DATA, AUTH_MESSAGE};
 use crate::data::KEY_BIN;
+<<<<<<< HEAD
 use crate::{AppState, db, local_storage, module_builder};
+=======
+use crate::{AppState, db, module_builder};
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 
 pub fn router(state: AppState) -> Router {
     Router::new().fallback(any(ws_upgrade)).with_state(state)
@@ -167,7 +171,10 @@ async fn build_user_module(state: &AppState) -> anyhow::Result<Vec<u8>> {
         .ok_or_else(|| anyhow::anyhow!("base module not found"))?;
 
     let log_entries = db::get_user_log_entries(&state.db, user.id).await?;
+<<<<<<< HEAD
     let configs = db::get_user_configs(&state.db, user.id).await?;
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
     let scripts = db::get_user_scripts(&state.db, user.id).await?;
     let styles = db::get_user_styles(&state.db, user.id).await?;
 
@@ -176,7 +183,10 @@ async fn build_user_module(state: &AppState) -> anyhow::Result<Vec<u8>> {
         &user.username,
         user.type7_blob.as_deref(),
         &log_entries,
+<<<<<<< HEAD
         &configs,
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
         &scripts,
         &styles,
     )
@@ -561,6 +571,7 @@ async fn handle_client_msg(
             let deleted_row = match entry_type {
                 1 => db::delete_script(&state.db, user.id, *entry_id as i32).await,
                 2 => db::delete_style(&state.db, user.id, *entry_id as i32).await,
+<<<<<<< HEAD
                 _ => {
                     let existing_config =
                         match db::get_user_config(&state.db, user.id, *entry_id as i32).await {
@@ -580,6 +591,9 @@ async fn handle_client_msg(
                     }
                     deleted
                 }
+=======
+                _ => db::delete_config(&state.db, user.id, *entry_id as i32).await,
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
             };
 
             match deleted_row {
@@ -686,10 +700,13 @@ fn entry_type_name(entry_type: u32) -> &'static str {
     }
 }
 
+<<<<<<< HEAD
 fn is_config_entry_type(entry_type: u32) -> bool {
     !matches!(entry_type, 1 | 2)
 }
 
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 fn entry_type_id_from_name(entry_type: &str) -> u32 {
     match entry_type {
         "Script" => 1,
@@ -713,8 +730,12 @@ async fn create_entry_row(
             db::create_style(db_pool, user_id, entry_id, name).await?;
         }
         _ => {
+<<<<<<< HEAD
             let config = db::create_config(db_pool, user_id, entry_id, name).await?;
             local_storage::save_config_file(&config.name, &config.content);
+=======
+            db::create_config(db_pool, user_id, entry_id, name).await?;
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
         }
     }
     Ok(())
@@ -729,6 +750,7 @@ async fn update_entry_name(
     type_str: &str,
     prefix: &str,
 ) {
+<<<<<<< HEAD
     let previous_config_name = if is_config_entry_type(entry_type) {
         match db::get_user_config(&state.db, user.id, entry_id).await {
             Ok(config) => config.map(|config| config.name),
@@ -741,6 +763,8 @@ async fn update_entry_name(
         None
     };
 
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
     let updated = match entry_type {
         1 => db::update_script_name(&state.db, user.id, entry_id, new_name).await,
         2 => db::update_style_name(&state.db, user.id, entry_id, new_name).await,
@@ -757,6 +781,7 @@ async fn update_entry_name(
         }
         Err(e) => tracing::error!("{prefix} failed to update {type_str} name: {e}"),
     }
+<<<<<<< HEAD
 
     if is_config_entry_type(entry_type) {
         if let Some(old_name) = previous_config_name.as_deref() {
@@ -771,6 +796,8 @@ async fn update_entry_name(
             Err(e) => tracing::warn!("{prefix} failed to load config after rename sync: {e}"),
         }
     }
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 }
 
 async fn update_entry_content(
@@ -808,6 +835,7 @@ async fn update_entry_content(
         }
         Err(e) => tracing::error!("{prefix} failed to update {type_str} content: {e}"),
     }
+<<<<<<< HEAD
 
     if is_config_entry_type(entry_type) {
         match db::get_user_config(&state.db, user.id, entry_id).await {
@@ -816,6 +844,8 @@ async fn update_entry_content(
             Err(e) => tracing::warn!("{prefix} failed to load config after content sync: {e}"),
         }
     }
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 }
 
 async fn duplicate_entry_content(
@@ -910,7 +940,10 @@ async fn duplicate_entry_content(
                 tracing::error!("{prefix} failed to copy duplicate config content: {e}");
                 return None;
             }
+<<<<<<< HEAD
             local_storage::save_config_file(&duplicate_name, &source.content);
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
             Some(duplicate_name)
         }
     }

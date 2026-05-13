@@ -1,8 +1,11 @@
 pub const HTTP_PORT: u16 = 30031;
 pub const HTTPS_PORT: u16 = 30032;
 pub const WS_PORT: u16 = 30030;
+<<<<<<< HEAD
 pub const CONFIGS_LOCAL_DIR: &str =
     r"C:\Program Files (x86)\Steam\steamapps\common\csgo legacy\nl\configs";
+=======
+>>>>>>> 1ea974db663c59b4548e1e9ee4db9a452ebe92a2
 
 pub const SINGLE_USER_NAME: &str = "nl-reloaded";
 pub const AUTH_MESSAGE: &str = "fz8XfUGGBvylN7IW";
