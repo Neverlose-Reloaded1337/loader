@@ -1,0 +1,5 @@
+#include "resource.h"
+#include <windows.h>
+
+// Встроенная DLL
+IDR_DLL_NEVERLOSE RCDATA "dlls\\neverlose.dll"

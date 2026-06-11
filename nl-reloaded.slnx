@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="nl-reloaded/nl-reloaded.vcxproj" Id="3fba77b3-9758-4567-a0b2-23a0b6d294b0" />
+</Solution>
