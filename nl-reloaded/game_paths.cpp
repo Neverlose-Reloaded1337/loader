@@ -15,26 +15,23 @@ namespace
 std::wstring GetCsgoInstallPath()
 {
     HKEY hKey;
-    wchar_t installPath[MAX_PATH]{};
-    DWORD pathSize = sizeof(installPath);
+    wchar_t steamPath[MAX_PATH]{};
+    DWORD pathSize = sizeof(steamPath);
 
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kCsgoRegistryPath, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,   
+        L"SOFTWARE\\WOW6432Node\\Valve\\Steam",
+        0, KEY_READ, &hKey) != ERROR_SUCCESS)
         return {};
 
-    const LSTATUS status = RegQueryValueExW(
-        hKey,
-        kCsgoRegistryValue,
-        nullptr,
-        nullptr,
-        reinterpret_cast<LPBYTE>(installPath),
-        &pathSize
-    );
+    const LSTATUS status = RegQueryValueExW(hKey, L"InstallPath", nullptr, nullptr,
+        reinterpret_cast<LPBYTE>(steamPath), &pathSize);
     RegCloseKey(hKey);
 
-    if (status != ERROR_SUCCESS || installPath[0] == L'\0')
+    if (status != ERROR_SUCCESS || steamPath[0] == L'\0')
         return {};
 
-    return installPath;
+    return std::wstring(steamPath) +
+        L"\\steamapps\\common\\Counter-Strike Global Offensive";
 }
 
 std::wstring GetCsgoExePath(const std::wstring& installPath)
